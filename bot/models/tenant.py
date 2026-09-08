@@ -43,8 +43,10 @@ class Tenant(FullAuditMixin):
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     wallets = relationship("Wallet", back_populates="tenant", cascade="all, delete-orphan")
     wallet_ledger_entries = relationship("WalletLedger", back_populates="tenant", cascade="all, delete-orphan")
-    # products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
-    # etc.
+
+    categories = relationship("Category", back_populates="tenant", cascade="all, delete-orphan")
+    products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
+    inventory_items = relationship("InventoryItem", back_populates="tenant", cascade="all, delete-orphan")
 
     def is_expired(self) -> bool:
         """Retorna True se o tenant estiver vencido."""
