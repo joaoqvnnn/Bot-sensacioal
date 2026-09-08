@@ -21,6 +21,7 @@ from bot.handlers.admin_messages import router as admin_messages_router
 from bot.handlers.admin_stock import router as admin_stock_router
 from bot.handlers.admin_users import router as admin_users_router
 from bot.handlers.admin_anti_flood import router as admin_anti_flood_router
+from bot.handlers.admin_notifications import router as admin_notifications_router
 from bot.handlers.rankings import router as rankings_router
 from bot.handlers.alerts import router as alerts_router
 from bot.handlers.inline import router as inline_router
@@ -52,6 +53,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
         admin_stock_router,
         admin_users_router,
         admin_anti_flood_router,
+        admin_notifications_router,
         rankings_router,
         alerts_router,
         inline_router,
