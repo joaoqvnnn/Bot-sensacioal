@@ -2,10 +2,8 @@
 Handlers administrativos de WhatsApp.
 
 Seção 20 do painel: gerencia integração com WhatsApp Business API.
-Inclui configuração de número, token, webhook, templates, opt-in,
-vinculação Telegram ↔ WhatsApp, mensagem de compra, imagem do produto,
-botão ATIVAR, WhatsApp Flow, status de entrega, retry, histórico, IA,
-limites e segurança.
+Inclui configuração básica, templates (compra, imagem, botão, fluxo),
+status de entrega, retry, rate limit e histórico.
 """
 
 import logging
@@ -16,12 +14,13 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
+from sqlalchemy import select, desc
 
 from bot.core.database import get_async_session_factory
 from bot.keyboards.utils import create_button
 from bot.models.settings import Settings
 from bot.models.user import User
+from bot.models.whatsapp_message import WhatsAppMessage  # modelo que deve existir
 from bot.services.user_service import get_tenant_for_bot, get_or_create_user
 
 logger = logging.getLogger(__name__)
@@ -153,6 +152,15 @@ async def whatsapp_admin_main(callback: CallbackQuery, state: FSMContext):
         retry_count = await _get_setting(session, tenant.id, "whatsapp_retry_count") or "3"
         rate_limit = await _get_setting(session, tenant.id, "whatsapp_rate_limit_per_minute") or "10"
 
+        # Conta mensagens recentes
+        total_messages = (await session.execute(
+            select(WhatsAppMessage).where(
+                WhatsAppMessage.tenant_id == tenant.id,
+                WhatsAppMessage.deleted_at.is_(None),
+            )
+        )).scalars().all()
+        recent_count = len(total_messages)
+
     text = (
         "📱 CONFIGURAÇÃO WHATSAPP\n\n"
         f"Status: {'🟢 ON' if whatsapp_enabled == 'true' else '🔴 OFF'}\n"
@@ -164,7 +172,8 @@ async def whatsapp_admin_main(callback: CallbackQuery, state: FSMContext):
         f"IA no WhatsApp: <b>{'Sim' if ai_enabled == 'true' else 'Não'}</b>\n"
         f"Vincular Telegram ↔ WhatsApp: <b>{'Sim' if link_enabled == 'true' else 'Não'}</b>\n"
         f"Retry: <b>{retry_count}</b>\n"
-        f"Rate limit por minuto: <b>{rate_limit}</b>\n\n"
+        f"Rate limit por minuto: <b>{rate_limit}</b>\n"
+        f"Mensagens registradas: {recent_count}\n\n"
         "Escolha uma opção:"
     )
     buttons = [
@@ -178,7 +187,9 @@ async def whatsapp_admin_main(callback: CallbackQuery, state: FSMContext):
         [create_button("Vincular Telegram ↔ WhatsApp", "whatsapp_admin:toggle_link")],
         [create_button("Retry", "whatsapp_admin:set_retry")],
         [create_button("Rate limit", "whatsapp_admin:set_rate_limit")],
-        [create_button("Mensagens e Templates", "whatsapp_admin:messages_menu")],
+        [create_button("📝 Templates/Mensagens", "whatsapp_admin:messages_menu")],
+        [create_button("📊 Status de entrega", "whatsapp_admin:delivery_status")],
+        [create_button("📜 Histórico", "whatsapp_admin:history")],
         [create_button("🔙 VOLTAR", "admin:main")],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -302,7 +313,7 @@ async def process_whatsapp_setting(message: Message, state: FSMContext):
 
 
 # ----------------------------------------------------------------------
-# MENSAGENS E TEMPLATES
+# TEMPLATES/MENSAGENS
 # ----------------------------------------------------------------------
 
 WHATSAPP_TEMPLATE_TYPES = {
@@ -403,9 +414,6 @@ async def process_template_button(message: Message, state: FSMContext):
         await message.answer("Valor vazio.")
         return
 
-    data = await state.get_data()
-    template_code = data.get("whatsapp_template_code")  # "button"
-
     tenant, admin = await _get_tenant_and_user_from_message(message)
     if tenant is None:
         await message.answer("Sistema indisponível.")
@@ -417,7 +425,90 @@ async def process_template_button(message: Message, state: FSMContext):
             await message.answer("Acesso negado.")
             await state.clear()
             return
-        await _set_setting(session, tenant.id, f"whatsapp_{template_code}_text", value)
+        await _set_setting(session, tenant.id, "whatsapp_button_text", value)
 
     await state.clear()
     await message.answer("✅ Botão ATIVAR atualizado.")
+
+
+# ----------------------------------------------------------------------
+# STATUS DE ENTREGA
+# ----------------------------------------------------------------------
+
+@router.callback_query(F.data == "whatsapp_admin:delivery_status")
+async def delivery_status(callback: CallbackQuery, state: FSMContext):
+    """Exibe status das últimas mensagens WhatsApp."""
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        messages = (await session.execute(
+            select(WhatsAppMessage)
+            .where(
+                WhatsAppMessage.tenant_id == tenant.id,
+                WhatsAppMessage.deleted_at.is_(None),
+            )
+            .order_by(desc(WhatsAppMessage.created_at))
+            .limit(10)
+        )).scalars().all()
+
+    if not messages:
+        text = "Nenhuma mensagem WhatsApp registrada."
+    else:
+        text = "📊 Status de entrega (últimas 10):\n\n"
+        for msg in messages:
+            status_emoji = "✅" if msg.status == "SENT" else "❌"
+            text += f"{status_emoji} {msg.phone_number} - {msg.status}\n"
+
+    buttons = [[create_button("🔙 VOLTAR", "whatsapp_admin:main")]]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await _edit_or_answer(callback, text, keyboard)
+
+
+# ----------------------------------------------------------------------
+# HISTÓRICO
+# ----------------------------------------------------------------------
+
+@router.callback_query(F.data == "whatsapp_admin:history")
+async def history(callback: CallbackQuery, state: FSMContext):
+    """Exibe histórico de mensagens WhatsApp."""
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        messages = (await session.execute(
+            select(WhatsAppMessage)
+            .where(
+                WhatsAppMessage.tenant_id == tenant.id,
+                WhatsAppMessage.deleted_at.is_(None),
+            )
+            .order_by(desc(WhatsAppMessage.created_at))
+            .limit(10)
+        )).scalars().all()
+
+    if not messages:
+        text = "Nenhum histórico."
+    else:
+        text = "📜 Histórico WhatsApp (últimas 10):\n\n"
+        for msg in messages:
+            text += (
+                f"🕐 {msg.created_at.strftime('%d/%m/%Y %H:%M')} - "
+                f"para {msg.phone_number} - {msg.status}\n"
+                f"Conteúdo: {msg.content[:50]}...\n\n"
+            )
+
+    buttons = [[create_button("🔙 VOLTAR", "whatsapp_admin:main")]]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await _edit_or_answer(callback, text, keyboard)
