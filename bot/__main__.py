@@ -1,8 +1,8 @@
 """
 Ponto de entrada principal do bot Larizinha Store.
 
-Carrega configurações, logging, banco de dados, Redis, registra handlers
-e inicia o polling. Nenhuma regra de negócio deve estar aqui.
+Carrega configurações, logging, banco de dados, Redis, registra middlewares
+e handlers, e inicia o polling. Nenhuma regra de negócio deve estar aqui.
 """
 
 import asyncio
@@ -19,6 +19,7 @@ from bot.core.config import settings
 from bot.core.logging import setup_logging
 from bot.core.redis import create_redis_client, close_redis_client
 from bot.handlers import register_all_handlers
+from bot.middlewares import AntiFloodMiddleware, MaintenanceMiddleware, TenantMiddleware
 
 
 async def main() -> None:
@@ -32,7 +33,7 @@ async def main() -> None:
     logger.info("Iniciando Larizinha Store bot...")
     logger.info(f"Ambiente: {settings.APP_ENV}")
 
-    # Cria cliente Redis para FSM e rate limit
+    # Cria cliente Redis para FSM, rate limit e middlewares
     redis_client = await create_redis_client(settings)
 
     # Configura storage do FSM
@@ -49,6 +50,34 @@ async def main() -> None:
 
     # Cria dispatcher
     dp = Dispatcher(storage=storage)
+
+    # Registra middlewares
+    # A ordem importa: tenant primeiro, depois manutenção e anti-flood
+    dp.message.middleware(TenantMiddleware())
+    dp.callback_query.middleware(TenantMiddleware())
+
+    dp.message.middleware(MaintenanceMiddleware())
+    dp.callback_query.middleware(MaintenanceMiddleware())
+
+    # Anti-flood (ajuste limites conforme necessidade)
+    dp.message.middleware(
+        AntiFloodMiddleware(
+            redis=redis_client,
+            max_actions=10,
+            window_seconds=10,
+            block_seconds=60,
+        )
+    )
+    dp.callback_query.middleware(
+        AntiFloodMiddleware(
+            redis=redis_client,
+            max_actions=20,
+            window_seconds=10,
+            block_seconds=60,
+        )
+    )
+
+    logger.info("Middlewares registrados.")
 
     # Registra todos os handlers
     register_all_handlers(dp)
