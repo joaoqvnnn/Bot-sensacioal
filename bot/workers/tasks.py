@@ -7,6 +7,7 @@ Define as funções de tarefas que serão executadas pelos workers:
 - send_delivery_task: processa entregas pendentes (Telegram, WhatsApp, e-mail)
 - process_notifications_task: processa notificações programadas
 - process_alerts_task: processa alertas de estoque
+- process_broadcast_task: processa fila de transmissões em massa
 
 Todas as tarefas usam sessão do banco e serviços existentes.
 """
@@ -26,6 +27,7 @@ from bot.services.inventory_service import release_expired_reservations
 from bot.workers.delivery_worker import send_delivery_task
 from bot.workers.notification_worker import process_notifications_task
 from bot.workers.alert_worker import process_alerts_task
+from bot.workers.broadcast_worker import process_broadcast_task
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,19 @@ async def process_alerts_task(
     return await _alert(ctx, tenant_id, bot)
 
 
+async def process_broadcast_task(
+    ctx: Dict[str, Any],
+    tenant_id: str,
+    broadcast_id: str,
+    bot=None,
+) -> bool:
+    """
+    Processa uma transmissão em massa.
+    """
+    from bot.workers.broadcast_worker import process_broadcast_task as _broadcast
+    return await _broadcast(ctx, tenant_id, broadcast_id, bot)
+
+
 async def startup(ctx: Dict[str, Any]) -> None:
     """Inicializa conexões no worker."""
     pass
@@ -123,6 +138,7 @@ class WorkerSettings:
         send_delivery_task,
         process_notifications_task,
         process_alerts_task,
+        process_broadcast_task,
         # Futuras tarefas:
         # send_broadcast_task,
         # process_withdrawal_task,
