@@ -1,11 +1,3 @@
-"""
-Serviço de notificações programadas.
-
-Fornece funções para agendar notificações e processar as que estão
-pendentes (vencidas). Usa a tabela ScheduledNotification e registra
-execuções em AuditLog para histórico.
-"""
-
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
