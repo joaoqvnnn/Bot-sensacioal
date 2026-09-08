@@ -2,8 +2,10 @@
 Handlers administrativos de WhatsApp.
 
 Seção 20 do painel: gerencia integração com WhatsApp Business API.
-Permite configurar número, token, webhook, templates, opt-in,
-vinculação Telegram ↔ WhatsApp, mensagens e IA.
+Inclui configuração de número, token, webhook, templates, opt-in,
+vinculação Telegram ↔ WhatsApp, mensagem de compra, imagem do produto,
+botão ATIVAR, WhatsApp Flow, status de entrega, retry, histórico, IA,
+limites e segurança.
 """
 
 import logging
@@ -29,6 +31,8 @@ router = Router()
 
 class AdminWhatsAppStates(StatesGroup):
     WAITING_VALUE = State()
+    WAITING_TEMPLATE_TEXT = State()
+    WAITING_TEMPLATE_BUTTON = State()
 
 
 async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
@@ -121,6 +125,10 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKe
     await callback.answer()
 
 
+# ----------------------------------------------------------------------
+# MENU PRINCIPAL
+# ----------------------------------------------------------------------
+
 @router.callback_query(F.data == "whatsapp_admin:main")
 async def whatsapp_admin_main(callback: CallbackQuery, state: FSMContext):
     """Menu principal de configuração do WhatsApp."""
@@ -139,8 +147,11 @@ async def whatsapp_admin_main(callback: CallbackQuery, state: FSMContext):
         business_account_id = await _get_setting(session, tenant.id, "whatsapp_business_account_id") or "Não configurado"
         webhook_verify_token = await _get_setting(session, tenant.id, "whatsapp_webhook_verify_token") or "Não configurado"
         opt_in_required = await _get_setting(session, tenant.id, "whatsapp_opt_in_required") or "true"
-        delivery_message_template = await _get_setting(session, tenant.id, "whatsapp_delivery_template") or "Padrão"
-        support_ai_enabled = await _get_setting(session, tenant.id, "whatsapp_ai_enabled") or "false"
+        delivery_template = await _get_setting(session, tenant.id, "whatsapp_delivery_template") or "Padrão"
+        ai_enabled = await _get_setting(session, tenant.id, "whatsapp_ai_enabled") or "false"
+        link_enabled = await _get_setting(session, tenant.id, "whatsapp_link_enabled") or "true"
+        retry_count = await _get_setting(session, tenant.id, "whatsapp_retry_count") or "3"
+        rate_limit = await _get_setting(session, tenant.id, "whatsapp_rate_limit_per_minute") or "10"
 
     text = (
         "📱 CONFIGURAÇÃO WHATSAPP\n\n"
@@ -149,8 +160,11 @@ async def whatsapp_admin_main(callback: CallbackQuery, state: FSMContext):
         f"Business Account ID: <b>{business_account_id}</b>\n"
         f"Webhook Verify Token: <b>{'Configurado' if webhook_verify_token != 'Não configurado' else 'Não configurado'}</b>\n"
         f"Opt-in obrigatório: <b>{'Sim' if opt_in_required == 'true' else 'Não'}</b>\n"
-        f"Template de entrega: <b>{delivery_message_template}</b>\n"
-        f"IA no WhatsApp: <b>{'Sim' if support_ai_enabled == 'true' else 'Não'}</b>\n\n"
+        f"Template de entrega: <b>{delivery_template}</b>\n"
+        f"IA no WhatsApp: <b>{'Sim' if ai_enabled == 'true' else 'Não'}</b>\n"
+        f"Vincular Telegram ↔ WhatsApp: <b>{'Sim' if link_enabled == 'true' else 'Não'}</b>\n"
+        f"Retry: <b>{retry_count}</b>\n"
+        f"Rate limit por minuto: <b>{rate_limit}</b>\n\n"
         "Escolha uma opção:"
     )
     buttons = [
@@ -161,15 +175,22 @@ async def whatsapp_admin_main(callback: CallbackQuery, state: FSMContext):
         [create_button("Opt-in obrigatório", "whatsapp_admin:toggle_opt_in")],
         [create_button("Template de entrega", "whatsapp_admin:set_delivery_template")],
         [create_button("IA no WhatsApp", "whatsapp_admin:toggle_ai")],
+        [create_button("Vincular Telegram ↔ WhatsApp", "whatsapp_admin:toggle_link")],
+        [create_button("Retry", "whatsapp_admin:set_retry")],
+        [create_button("Rate limit", "whatsapp_admin:set_rate_limit")],
+        [create_button("Mensagens e Templates", "whatsapp_admin:messages_menu")],
         [create_button("🔙 VOLTAR", "admin:main")],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await _edit_or_answer(callback, text, keyboard)
 
 
-@router.callback_query(F.data == "whatsapp_admin:toggle")
-async def toggle_whatsapp(callback: CallbackQuery, state: FSMContext):
-    """Alterna integração WhatsApp."""
+# ----------------------------------------------------------------------
+# TOGGLES
+# ----------------------------------------------------------------------
+
+async def _toggle_setting(callback: CallbackQuery, state: FSMContext, key: str, label: str):
+    """Alterna uma configuração booleana."""
     tenant, user = await _get_tenant_and_user_from_callback(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
@@ -179,53 +200,37 @@ async def toggle_whatsapp(callback: CallbackQuery, state: FSMContext):
         if not await _is_admin(session, tenant.id, user.id):
             await callback.answer("Acesso negado.", show_alert=True)
             return
-        current = await _get_setting(session, tenant.id, "whatsapp_enabled") or "false"
+        current = await _get_setting(session, tenant.id, key) or "false"
         new_val = "false" if current == "true" else "true"
-        await _set_setting(session, tenant.id, "whatsapp_enabled", new_val)
+        await _set_setting(session, tenant.id, key, new_val)
 
-    await callback.answer(f"WhatsApp {'ativado' if new_val == 'true' else 'desativado'}.")
+    await callback.answer(f"{label} {'ativado' if new_val == 'true' else 'desativado'}.")
     await whatsapp_admin_main(callback, state)
+
+
+@router.callback_query(F.data == "whatsapp_admin:toggle")
+async def toggle_whatsapp(callback: CallbackQuery, state: FSMContext):
+    await _toggle_setting(callback, state, "whatsapp_enabled", "WhatsApp")
 
 
 @router.callback_query(F.data == "whatsapp_admin:toggle_opt_in")
 async def toggle_opt_in(callback: CallbackQuery, state: FSMContext):
-    """Alterna exigência de opt-in."""
-    tenant, user = await _get_tenant_and_user_from_callback(callback)
-    if tenant is None:
-        await callback.answer("Sistema indisponível.")
-        return
-
-    async with get_async_session_factory() as session:
-        if not await _is_admin(session, tenant.id, user.id):
-            await callback.answer("Acesso negado.", show_alert=True)
-            return
-        current = await _get_setting(session, tenant.id, "whatsapp_opt_in_required") or "true"
-        new_val = "false" if current == "true" else "true"
-        await _set_setting(session, tenant.id, "whatsapp_opt_in_required", new_val)
-
-    await callback.answer(f"Opt-in {'obrigatório' if new_val == 'true' else 'opcional'}.")
-    await whatsapp_admin_main(callback, state)
+    await _toggle_setting(callback, state, "whatsapp_opt_in_required", "Opt-in")
 
 
 @router.callback_query(F.data == "whatsapp_admin:toggle_ai")
 async def toggle_ai(callback: CallbackQuery, state: FSMContext):
-    """Alterna IA no WhatsApp."""
-    tenant, user = await _get_tenant_and_user_from_callback(callback)
-    if tenant is None:
-        await callback.answer("Sistema indisponível.")
-        return
+    await _toggle_setting(callback, state, "whatsapp_ai_enabled", "IA")
 
-    async with get_async_session_factory() as session:
-        if not await _is_admin(session, tenant.id, user.id):
-            await callback.answer("Acesso negado.", show_alert=True)
-            return
-        current = await _get_setting(session, tenant.id, "whatsapp_ai_enabled") or "false"
-        new_val = "false" if current == "true" else "true"
-        await _set_setting(session, tenant.id, "whatsapp_ai_enabled", new_val)
 
-    await callback.answer(f"IA no WhatsApp {'ativada' if new_val == 'true' else 'desativada'}.")
-    await whatsapp_admin_main(callback, state)
+@router.callback_query(F.data == "whatsapp_admin:toggle_link")
+async def toggle_link(callback: CallbackQuery, state: FSMContext):
+    await _toggle_setting(callback, state, "whatsapp_link_enabled", "Vinculação Telegram ↔ WhatsApp")
 
+
+# ----------------------------------------------------------------------
+# EDIÇÃO DE VALORES
+# ----------------------------------------------------------------------
 
 async def _edit_whatsapp_setting(callback: CallbackQuery, state: FSMContext, key: str, title: str):
     """Inicia edição de configuração do WhatsApp."""
@@ -258,9 +263,19 @@ async def set_delivery_template(callback: CallbackQuery, state: FSMContext):
     await _edit_whatsapp_setting(callback, state, "whatsapp_delivery_template", "Template de entrega")
 
 
+@router.callback_query(F.data == "whatsapp_admin:set_retry")
+async def set_retry(callback: CallbackQuery, state: FSMContext):
+    await _edit_whatsapp_setting(callback, state, "whatsapp_retry_count", "Número de retry")
+
+
+@router.callback_query(F.data == "whatsapp_admin:set_rate_limit")
+async def set_rate_limit(callback: CallbackQuery, state: FSMContext):
+    await _edit_whatsapp_setting(callback, state, "whatsapp_rate_limit_per_minute", "Rate limit por minuto")
+
+
 @router.message(AdminWhatsAppStates.WAITING_VALUE)
 async def process_whatsapp_setting(message: Message, state: FSMContext):
-    """Salva novo valor da configuração do WhatsApp."""
+    """Salva novo valor de configuração do WhatsApp."""
     new_value = message.text.strip()
     if not new_value:
         await message.answer("Valor vazio não permitido.")
@@ -284,3 +299,125 @@ async def process_whatsapp_setting(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer("✅ Configuração do WhatsApp atualizada.")
+
+
+# ----------------------------------------------------------------------
+# MENSAGENS E TEMPLATES
+# ----------------------------------------------------------------------
+
+WHATSAPP_TEMPLATE_TYPES = {
+    "purchase": "Mensagem de compra",
+    "delivery": "Mensagem de entrega",
+    "image": "Imagem do produto",
+    "button": "Botão ATIVAR",
+    "flow": "WhatsApp Flow",
+    "link": "Mensagem de vinculação Telegram ↔ WhatsApp",
+}
+
+
+@router.callback_query(F.data == "whatsapp_admin:messages_menu")
+async def messages_menu(callback: CallbackQuery, state: FSMContext):
+    """Menu de mensagens e templates do WhatsApp."""
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+    text = "💬 Mensagens/Templates do WhatsApp\n\nSelecione:"
+    buttons = []
+    for code, label in WHATSAPP_TEMPLATE_TYPES.items():
+        buttons.append([create_button(label, f"whatsapp_admin:template_edit:{code}")])
+    buttons.append([create_button("🔙 VOLTAR", "whatsapp_admin:main")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await _edit_or_answer(callback, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("whatsapp_admin:template_edit:"))
+async def template_edit(callback: CallbackQuery, state: FSMContext):
+    """Inicia edição de um template/mensagem."""
+    template_code = callback.data.split(":")[-1]
+    template_label = WHATSAPP_TEMPLATE_TYPES.get(template_code, template_code)
+
+    await state.update_data(whatsapp_template_code=template_code)
+
+    if template_code in ("purchase", "delivery", "link"):
+        await state.set_state(AdminWhatsAppStates.WAITING_TEMPLATE_TEXT)
+        text = f"Digite o texto para <b>{template_label}</b>:"
+    elif template_code == "image":
+        await state.set_state(AdminWhatsAppStates.WAITING_TEMPLATE_TEXT)
+        text = "Digite a URL da imagem do produto para a mensagem WhatsApp:"
+    elif template_code == "button":
+        await state.set_state(AdminWhatsAppStates.WAITING_TEMPLATE_BUTTON)
+        text = "Digite o texto do botão ATIVAR (ex: 🔐 ATIVAR):"
+    elif template_code == "flow":
+        await state.set_state(AdminWhatsAppStates.WAITING_TEMPLATE_TEXT)
+        text = "Digite o ID ou nome do WhatsApp Flow:"
+    else:
+        await callback.answer("Tipo não suportado.")
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[create_button("🔙 CANCELAR", "whatsapp_admin:messages_menu")]]
+    )
+    await _edit_or_answer(callback, text, keyboard)
+
+
+@router.message(AdminWhatsAppStates.WAITING_TEMPLATE_TEXT)
+async def process_template_text(message: Message, state: FSMContext):
+    """Salva texto do template/mensagem."""
+    value = message.text.strip()
+    if not value:
+        await message.answer("Valor vazio.")
+        return
+
+    data = await state.get_data()
+    template_code = data.get("whatsapp_template_code")
+
+    tenant, admin = await _get_tenant_and_user_from_message(message)
+    if tenant is None:
+        await message.answer("Sistema indisponível.")
+        await state.clear()
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, admin.id):
+            await message.answer("Acesso negado.")
+            await state.clear()
+            return
+        await _set_setting(session, tenant.id, f"whatsapp_{template_code}_text", value)
+
+    await state.clear()
+    await message.answer("✅ Mensagem/Template atualizado.")
+
+
+@router.message(AdminWhatsAppStates.WAITING_TEMPLATE_BUTTON)
+async def process_template_button(message: Message, state: FSMContext):
+    """Salva texto do botão ATIVAR."""
+    value = message.text.strip()
+    if not value:
+        await message.answer("Valor vazio.")
+        return
+
+    data = await state.get_data()
+    template_code = data.get("whatsapp_template_code")  # "button"
+
+    tenant, admin = await _get_tenant_and_user_from_message(message)
+    if tenant is None:
+        await message.answer("Sistema indisponível.")
+        await state.clear()
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, admin.id):
+            await message.answer("Acesso negado.")
+            await state.clear()
+            return
+        await _set_setting(session, tenant.id, f"whatsapp_{template_code}_text", value)
+
+    await state.clear()
+    await message.answer("✅ Botão ATIVAR atualizado.")
