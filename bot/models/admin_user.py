@@ -2,7 +2,8 @@
 Modelo de usuário administrativo.
 
 Representa um usuário com permissões administrativas em um tenant,
-separando as funções de admin/dono do usuário comum, com papéis e status.
+separando as funções de admin/dono do usuário comum, com papéis e
+permissões individuais.
 """
 
 import uuid
@@ -60,6 +61,32 @@ class AdminUser(FullAuditMixin):
         nullable=True,
     )
     granted_by = relationship("User", foreign_keys=[granted_by_user_id])
+
+    # ------------------------------------------------------------------
+    # Permissões individuais
+    # ------------------------------------------------------------------
+    can_manage_finance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_stock: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_users: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_support: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_settings: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_broadcast: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_withdrawals: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_affiliates: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_products: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_manage_payments: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    def has_permission(self, permission_code: str) -> bool:
+        """
+        Verifica se o administrador possui uma permissão específica.
+
+        Args:
+            permission_code: Código da permissão (ex: "can_manage_finance").
+
+        Returns:
+            bool: True se a permissão estiver ativa.
+        """
+        return bool(getattr(self, permission_code, False))
 
     def __repr__(self) -> str:
         return f"<AdminUser(id={self.id}, user_id={self.user_id}, role='{self.role}')>"
