@@ -6,7 +6,7 @@ pendentes (vencidas). Usa a tabela ScheduledNotification e registra
 execuções em AuditLog para histórico.
 """
 
- logging
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from uuid import UUID
