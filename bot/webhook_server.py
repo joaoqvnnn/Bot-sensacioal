@@ -1,6 +1,6 @@
 """
 Servidor HTTP para receber webhooks do Mercado Pago enquanto roda o bot.
-Inclui validação de assinatura HMAC e inicia bot + servidor.
+Inclui validação de assinatura HMAC e apaga webhook do Telegram ao iniciar.
 """
 
 import asyncio
@@ -121,6 +121,9 @@ async def start_bot():
 
     register_all_handlers(dp)
 
+    # Apaga webhook ativo para permitir polling
+    await bot.delete_webhook(drop_pending_updates=True)
+
     print("✅ Bot conectado e polling iniciado")
     await dp.start_polling(bot)
     await bot.session.close()
@@ -131,9 +134,7 @@ if __name__ == "__main__":
     def run_server():
         uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
-    # Inicia servidor HTTP em uma thread separada
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
 
-    # Inicia o bot no loop principal (polling)
     asyncio.run(start_bot())
