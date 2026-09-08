@@ -6,17 +6,15 @@ pendentes (vencidas). Usa a tabela ScheduledNotification.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.models.notification import Notification
 from bot.models.scheduled_notification import ScheduledNotification
 from bot.models.user import User
-from bot.models.tenant import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +29,7 @@ async def schedule_notification(
     repeat_until: Optional[datetime] = None,
     image_url: Optional[str] = None,
     video_url: Optional[str] = None,
+    timezone_str: str = "UTC",
 ) -> ScheduledNotification:
     """
     Cria uma notificação programada.
@@ -40,11 +39,12 @@ async def schedule_notification(
         tenant_id: ID do tenant.
         title: Título interno.
         message_text: Texto da notificação.
-        run_at: Data/hora de execução.
+        run_at: Data/hora de execução (UTC).
         repeat_interval_minutes: Intervalo de repetição (opcional).
         repeat_until: Data limite para repetição (opcional).
         image_url: URL de imagem opcional.
         video_url: URL de vídeo opcional.
+        timezone_str: Fuso horário individual.
 
     Returns:
         ScheduledNotification: Notificação criada.
@@ -58,6 +58,7 @@ async def schedule_notification(
         repeat_until=repeat_until,
         image_url=image_url,
         video_url=video_url,
+        timezone_str=timezone_str,
         status="PENDING",
     )
     session.add(notif)
@@ -102,7 +103,7 @@ async def process_due_notifications(
         notif.last_run_at = now
         await session.commit()
 
-        # Envia para todos os usuários ativos do tenant (ou segmento específico)
+        # Envia para todos os usuários ativos do tenant
         if bot:
             await _send_to_all_users(session, tenant_id, bot, notif)
         else:
@@ -110,8 +111,6 @@ async def process_due_notifications(
 
         # Se repetir, reagenda
         if notif.repeat_interval_minutes:
-            # Calcula próximo run_at
-            from datetime import timedelta
             next_run = now + timedelta(minutes=notif.repeat_interval_minutes)
             if notif.repeat_until and next_run > notif.repeat_until:
                 notif.status = "COMPLETED"
@@ -131,12 +130,6 @@ async def process_due_notifications(
 async def _send_to_all_users(session, tenant_id, bot, notif: ScheduledNotification) -> None:
     """
     Envia a notificação para todos os usuários ativos do tenant.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        bot: Instância do Bot.
-        notif: Notificação a enviar.
     """
     from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
@@ -159,7 +152,6 @@ async def _send_to_all_users(session, tenant_id, bot, notif: ScheduledNotificati
                 await bot.send_message(user.telegram_id, notif.message_text)
             sent_count += 1
         except (TelegramForbiddenError, TelegramBadRequest):
-            # Usuário bloqueou o bot ou ID inválido
             logger.warning(f"Falha ao enviar notificação para user_id={user.telegram_id}")
         except Exception as e:
             logger.exception(f"Erro ao enviar notificação: {e}")
