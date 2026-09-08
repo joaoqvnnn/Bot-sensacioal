@@ -37,10 +37,11 @@ class RechargeStates(StatesGroup):
 
 async def _get_tenant_and_user(message_or_callback):
     """Obtém tenant e usuário a partir de Message ou Callback."""
-    bot = message_or_callback.bot
     user_id = message_or_callback.from_user.id
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, bot.username)
+
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -58,13 +59,11 @@ def get_deposit_config():
     """
     Retorna configurações de depósito (mínimo, máximo, bônus).
     Futuramente virão do banco de dados (tabela settings).
-    Por ora, usamos valores do .env ou padrões.
     """
-    # Esses valores devem ser movidos para configurações editáveis
     min_deposit_cents = int(settings.MERCADO_PAGO_MIN_DEPOSIT * 100)
     max_deposit_cents = int(settings.MERCADO_PAGO_MAX_DEPOSIT * 100)
-    bonus_percent = 0  # default, virá do admin
-    min_bonus_cents = 1000  # default, R$10,00
+    bonus_percent = 0
+    min_bonus_cents = 1000
     return {
         "min_deposit_cents": min_deposit_cents,
         "max_deposit_cents": max_deposit_cents,
@@ -81,7 +80,8 @@ async def show_recharge_menu(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         balance_cents = await get_balance(session, tenant.id, user.id)
 
     text = (
@@ -97,6 +97,7 @@ async def show_recharge_menu(callback: CallbackQuery, state: FSMContext):
         [create_button("🔙 VOLTAR", "menu:back")],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
     try:
         await callback.message.edit_text(text, reply_markup=keyboard)
     except Exception:
@@ -122,20 +123,14 @@ async def ask_amount(callback: CallbackQuery, state: FSMContext):
         text += f"\n❗️ Recarga mínima para ganhar o bônus: {cents_to_brl(config['min_bonus_cents'])}"
 
     await state.set_state(RechargeStates.WAITING_AMOUNT)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[create_button("🔙 CANCELAR", "menu:recharge")]]
+    )
     try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[create_button("🔙 CANCELAR", "menu:recharge")]]
-            ),
-        )
+        await callback.message.edit_text(text, reply_markup=keyboard)
     except Exception:
-        await callback.message.answer(
-            text,
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[create_button("🔙 CANCELAR", "menu:recharge")]]
-            ),
-        )
+        await callback.message.answer(text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -166,7 +161,6 @@ async def process_amount(message: Message, state: FSMContext):
         await message.answer(f"❌ Valor acima do máximo: {cents_to_brl(max_deposit)}")
         return
 
-    # Verifica bônus
     bonus_percent = config["bonus_percent"]
     min_bonus = config["min_bonus_cents"]
     eligible_for_bonus = bonus_percent > 0 and amount_cents >= min_bonus
@@ -187,7 +181,6 @@ async def process_amount(message: Message, state: FSMContext):
             [create_button("🔙 CANCELAR", "menu:recharge")],
         ]
     else:
-        # Se não elegível, mas existe bônus e valor menor que mínimo
         if bonus_percent > 0 and amount_cents < min_bonus:
             missing = min_bonus - amount_cents
             text = (
@@ -203,7 +196,6 @@ async def process_amount(message: Message, state: FSMContext):
                 [create_button("🔙 CANCELAR", "menu:recharge")],
             ]
         else:
-            # Sem bônus
             text = (
                 f"💰 Recarga de {cents_to_brl(amount_cents)}\n"
                 "Confirme para gerar o Pix."
@@ -228,17 +220,17 @@ async def confirm_recharge(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    # Gera idempotency key única
     idempotency_key = f"recharge:{user.id}:{callback.message.message_id}"
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         try:
             payment = await create_pix_payment(
                 session=session,
                 tenant_id=tenant.id,
                 user_id=user.id,
                 amount_cents=amount_cents,
-                bonus_cents=0,  # bônus será calculado no serviço de pagamento
+                bonus_cents=0,
                 idempotency_key=idempotency_key,
             )
         except NotImplementedError:
@@ -262,7 +254,6 @@ async def confirm_recharge(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
 
-    # Monta mensagem com QR Code e copia-e-cola
     text = (
         "💰 Comprar Saldo com Pix Automático:\n"
         f"⏱️ Expira em: {settings.MERCADO_PAGO_EXPIRATION_MINUTES} Minutos\n"
