@@ -6,9 +6,11 @@ A função `register_all_handlers` é chamada na inicialização do bot
 para incluir os routers no Dispatcher.
 """
 
+import logging
 from aiogram import Dispatcher
 
 from bot.handlers.start import router as start_router
+from bot.handlers.catalog import router as catalog_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -24,20 +26,14 @@ def register_all_handlers(dp: Dispatcher) -> None:
     # Lista de routers a registrar
     routers = [
         start_router,
+        catalog_router,
         # Futuros routers serão adicionados aqui:
-        # catalog_router,
         # profile_router,
         # admin_router,
     ]
 
     for router in routers:
         dp.include_router(router)
-
-    # Validação de conflitos: não pode haver dois routers com o mesmo nome?
-    # O aiogram permite incluir vários; a colisão de comandos será detectada
-    # pelo próprio aiogram ao registrar. Em caso de conflito, ele lançará exceção.
-    # Aqui apenas logamos.
-    import logging
 
     logger = logging.getLogger(__name__)
     logger.info(f"{len(routers)} router(s) registrado(s) no Dispatcher.")
