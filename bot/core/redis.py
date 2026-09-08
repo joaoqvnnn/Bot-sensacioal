@@ -3,9 +3,7 @@ Cliente Redis assíncrono para o bot.
 
 Este módulo fornece uma função para criar e validar a conexão com o Redis,
 utilizando a biblioteca redis.asyncio. A instância deve ser criada durante
-a inicialização do bot (em bot/__main__.py) e injetada onde necessário.
-
-Nenhuma conexão é aberta no momento da importação deste módulo.
+a inicialização do bot (em bot/webhook_server.py) e injetada onde necessário.
 """
 
 import logging
@@ -30,16 +28,16 @@ async def create_redis_client(settings: Settings) -> aioredis.Redis:
         aioredis.Redis: Cliente Redis pronto para uso.
 
     Raises:
-        ConnectionError: Se o Redis não estiver acessível ou a senha for inválida.
-        ValueError: Se a senha do Redis estiver vazia (em produção).
+        ConnectionError: Se o Redis não estiver acessível.
     """
-    redis_password = settings.REDIS_PASSWORD.get_secret_value()
+    redis_password = (
+        settings.REDIS_PASSWORD.get_secret_value()
+        if settings.REDIS_PASSWORD
+        else None
+    )
 
     if not redis_password:
-        if settings.APP_ENV == "production":
-            raise ValueError("REDIS_PASSWORD não pode ser vazia em produção.")
-        logger.warning("REDIS_PASSWORD vazia. Conectando sem senha (apenas desenvolvimento).")
-        redis_password = None
+        logger.warning("REDIS_PASSWORD não configurada. Conectando sem senha.")
 
     logger.info(f"Conectando ao Redis em {settings.REDIS_HOST}:{settings.REDIS_PORT} ...")
 
