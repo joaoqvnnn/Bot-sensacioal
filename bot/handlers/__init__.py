@@ -20,6 +20,7 @@ from bot.handlers.rankings import router as rankings_router
 from bot.handlers.alerts import router as alerts_router
 from bot.handlers.inline import router as inline_router
 from bot.handlers.terms import router as terms_router
+from bot.handlers.support import router as support_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -45,8 +46,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
         alerts_router,
         inline_router,
         terms_router,
-        # Futuros routers serão adicionados aqui:
-        # support_router,
+        support_router,
     ]
 
     for router in routers:
