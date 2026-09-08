@@ -1,10 +1,8 @@
 """
 Ponto de entrada principal do bot Larizinha Store.
 
-Este módulo carrega as configurações, instancia o Bot do aiogram,
-o Dispatcher, aplica middlewares globais e inicia o polling.
-
-Nenhuma regra de negócio deve estar aqui. Apenas inicialização.
+Carrega configurações, logging, banco de dados, Redis, registra handlers
+e inicia o polling. Nenhuma regra de negócio deve estar aqui.
 """
 
 import asyncio
@@ -18,20 +16,19 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.core.config import settings
-from bot.core.redis import create_redis_client
 from bot.core.logging import setup_logging
+from bot.core.redis import create_redis_client, close_redis_client
+from bot.handlers import register_all_handlers
 
 
 async def main() -> None:
-    """Função principal de inicialização e execução do bot."""
-    # Configura logging estruturado
+    """Inicializa e executa o bot."""
     setup_logging(
         level=settings.LOG_LEVEL,
         app_name=settings.APP_NAME,
         env=settings.APP_ENV,
     )
     logger = logging.getLogger(__name__)
-
     logger.info("Iniciando Larizinha Store bot...")
     logger.info(f"Ambiente: {settings.APP_ENV}")
 
@@ -40,13 +37,11 @@ async def main() -> None:
 
     # Configura storage do FSM
     if settings.APP_ENV == "production":
-        # Em produção usa Redis para manter estado entre restarts
         storage = RedisStorage(redis=redis_client)
     else:
-        # Em desenvolvimento pode usar memória (mais simples)
         storage = MemoryStorage()
 
-    # Cria bot com parse mode HTML e token seguro
+    # Cria bot com parse mode HTML
     bot = Bot(
         token=settings.TELEGRAM_BOT_TOKEN.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -55,13 +50,10 @@ async def main() -> None:
     # Cria dispatcher
     dp = Dispatcher(storage=storage)
 
-    # Importa e registra handlers
-    # Os handlers serão importados aqui futuramente
-    # from bot.handlers import register_all_handlers
-    # register_all_handlers(dp)
-    logger.warning("Nenhum handler registrado ainda.")
+    # Registra todos os handlers
+    register_all_handlers(dp)
+    logger.info("Handlers registrados com sucesso.")
 
-    # Inicia polling
     try:
         logger.info("Iniciando polling...")
         await dp.start_polling(bot)
@@ -72,7 +64,7 @@ async def main() -> None:
         sys.exit(1)
     finally:
         await bot.session.close()
-        await redis_client.aclose()
+        await close_redis_client(redis_client)
         logger.info("Recursos liberados. Bot encerrado.")
 
 
