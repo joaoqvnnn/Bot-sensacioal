@@ -29,8 +29,9 @@ router = Router()
 
 async def _get_tenant_and_user(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -46,7 +47,6 @@ async def _get_tenant_and_user(callback: CallbackQuery):
 
 async def _get_affiliate_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     """Retorna estatísticas reais do afiliado."""
-    # Quantidade de indicações
     referrals_count_stmt = select(func.count(Referral.id)).where(
         Referral.tenant_id == tenant_id,
         Referral.referrer_user_id == user_id,
@@ -54,7 +54,6 @@ async def _get_affiliate_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     )
     referrals_count = (await session.execute(referrals_count_stmt)).scalar_one()
 
-    # Total de comissões (somando comissões PENDING e PAID)
     total_commission_stmt = select(func.sum(AffiliateCommission.amount_cents)).where(
         AffiliateCommission.tenant_id == tenant_id,
         AffiliateCommission.user_id == user_id,
@@ -63,7 +62,6 @@ async def _get_affiliate_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     )
     total_commission = (await session.execute(total_commission_stmt)).scalar_one() or 0
 
-    # Saldo de comissões disponíveis para saque (somente PAID)
     available_commission_stmt = select(func.sum(AffiliateCommission.amount_cents)).where(
         AffiliateCommission.tenant_id == tenant_id,
         AffiliateCommission.user_id == user_id,
@@ -72,7 +70,6 @@ async def _get_affiliate_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     )
     available_commission = (await session.execute(available_commission_stmt)).scalar_one() or 0
 
-    # Pontos
     points_stmt = select(AffiliatePoints).where(
         AffiliatePoints.tenant_id == tenant_id,
         AffiliatePoints.user_id == user_id,
@@ -97,13 +94,11 @@ async def show_affiliate_menu(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         stats = await _get_affiliate_stats(session, tenant.id, user.id)
 
-    # Link de afiliado (formato: https://t.me/<bot_username>?start=<referral_code>)
-    # Aqui usamos o id do usuário como código simples, mas em produção
-    # deve ser um código único gerado (ex: referral_code no modelo User)
-    bot_username = callback.bot.username
+    bot_username = settings.TELEGRAM_BOT_USERNAME
     referral_code = f"ref{user.id}"  # simplificação; futuramente usar campo próprio
     affiliate_link = f"https://t.me/{bot_username}?start={referral_code}"
 
@@ -140,7 +135,6 @@ async def show_withdrawals(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    # Futuro: buscar saques do banco
     text = (
         "📊 HISTÓRICO DE SAQUES\n"
         "Você ainda não solicitou nenhum saque.\n"
@@ -162,7 +156,6 @@ async def show_withdrawals(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "affiliate:request_withdrawal")
 async def request_withdrawal(callback: CallbackQuery, state: FSMContext):
     """Solicita saque (placeholder, implementação futura)."""
-    # Futuro: fluxo completo com validação de chave Pix e senha
     text = "💸 Em breve: solicitação de saque completa."
     buttons = [[create_button("🔙 VOLTAR", "affiliate:withdrawals")]]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -177,7 +170,6 @@ async def request_withdrawal(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "affiliate:convert_points")
 async def convert_points(callback: CallbackQuery, state: FSMContext):
     """Converte pontos em saldo (placeholder)."""
-    # Futuro: chamar affiliate_service.convert_points_to_balance
     text = "🔄 Em breve: conversão de pontos."
     buttons = [[create_button("🔙 VOLTAR", "menu:affiliates")]]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
