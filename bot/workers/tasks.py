@@ -5,7 +5,8 @@ Define as funções de tarefas que serão executadas pelos workers:
 - process_payment_task: processa confirmação de pagamento vinda do webhook
 - release_expired_reservations_task: libera reservas de estoque expiradas
 - send_delivery_task: processa entregas pendentes (Telegram, WhatsApp, e-mail)
-- (futuro) send_broadcast_task, process_withdrawal_task
+- process_notifications_task: processa notificações programadas
+- process_alerts_task: processa alertas de estoque
 
 Todas as tarefas usam sessão do banco e serviços existentes.
 """
@@ -23,6 +24,8 @@ from bot.core.redis import create_redis_client
 from bot.services.payment_service import process_payment_webhook
 from bot.services.inventory_service import release_expired_reservations
 from bot.workers.delivery_worker import send_delivery_task
+from bot.workers.notification_worker import process_notifications_task
+from bot.workers.alert_worker import process_alerts_task
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +39,6 @@ async def process_payment_task(
 ) -> None:
     """
     Processa pagamento confirmado via webhook (tarefa em worker).
-
-    Args:
-        ctx: Contexto do arq (contém redis e outras dependências).
-        tenant_id: ID do tenant (string).
-        payment_id: ID interno do pagamento (string).
-        external_status: Status informado pelo provedor.
-        provider_response: Resposta bruta (opcional).
     """
     async with get_async_session_factory() as session:
         try:
@@ -61,13 +57,6 @@ async def process_payment_task(
 async def release_expired_reservations_task(ctx: Dict[str, Any], tenant_id: str) -> int:
     """
     Libera reservas expiradas para um tenant.
-
-    Args:
-        ctx: Contexto do arq.
-        tenant_id: ID do tenant.
-
-    Returns:
-        int: Quantidade de reservas liberadas.
     """
     async with get_async_session_factory() as session:
         try:
@@ -84,19 +73,34 @@ async def send_delivery_task(
     delivery_job_id: str,
 ) -> bool:
     """
-    Processa um job de entrega pendente (tarefa em worker).
-
-    Args:
-        ctx: Contexto do arq.
-        delivery_job_id: ID do DeliveryJob (string).
-
-    Returns:
-        bool: True se entrega concluída, False caso contrário.
+    Processa um job de entrega pendente.
     """
-    async with get_async_session_factory() as session:
-        # A função real está em delivery_worker.py; aqui apenas chamamos.
-        from bot.workers.delivery_worker import send_delivery_task as _send
-        return await _send(ctx, delivery_job_id)
+    from bot.workers.delivery_worker import send_delivery_task as _send
+    return await _send(ctx, delivery_job_id)
+
+
+async def process_notifications_task(
+    ctx: Dict[str, Any],
+    tenant_id: str,
+    bot=None,
+) -> int:
+    """
+    Processa notificações programadas.
+    """
+    from bot.workers.notification_worker import process_notifications_task as _process
+    return await _process(ctx, tenant_id, bot)
+
+
+async def process_alerts_task(
+    ctx: Dict[str, Any],
+    tenant_id: str,
+    bot=None,
+) -> int:
+    """
+    Processa alertas de estoque.
+    """
+    from bot.workers.alert_worker import process_alerts_task as _alert
+    return await _alert(ctx, tenant_id, bot)
 
 
 async def startup(ctx: Dict[str, Any]) -> None:
@@ -117,6 +121,8 @@ class WorkerSettings:
         process_payment_task,
         release_expired_reservations_task,
         send_delivery_task,
+        process_notifications_task,
+        process_alerts_task,
         # Futuras tarefas:
         # send_broadcast_task,
         # process_withdrawal_task,
