@@ -1,10 +1,8 @@
 """
 Handlers do painel administrativo principal.
 
-Este módulo fornece o menu inicial do administrador, com dashboard
-e navegação para todas as seções (módulos) do painel.
-
-Cada seção possui seu próprio handler dedicado, evitando conflitos.
+Fornece o menu inicial do administrador, com dashboard e navegação
+para todas as seções. Acesso via botão no menu principal ou comando /admin.
 """
 
 import logging
@@ -12,7 +10,8 @@ from typing import Optional
 from uuid import UUID
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import func, select
 
@@ -21,6 +20,7 @@ from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button
 from bot.models.order import Order
 from bot.models.user import User
+from bot.models.tenant import Tenant
 from bot.services.user_service import get_tenant_for_bot, get_or_create_user
 
 logger = logging.getLogger(__name__)
@@ -28,56 +28,9 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-async def _get_tenant_and_user(callback: CallbackQuery):
-    """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
-        if tenant is None:
-            return None, None
-        user = await get_or_create_user(
-            session=session,
-            tenant=tenant,
-            telegram_id=callback.from_user.id,
-            username=callback.from_user.username,
-            first_name=callback.from_user.first_name,
-            last_name=callback.from_user.last_name,
-        )
-        return tenant, user
-
-
-async def _is_admin(session, tenant_id: UUID, user_id: UUID) -> bool:
-    """Verifica se o usuário é administrador ou dono no tenant."""
-    user = (await session.execute(
-        select(User).where(User.id == user_id, User.tenant_id == tenant_id)
-    )).scalar_one_or_none()
-    if user and (user.is_owner or user.is_admin):
-        return True
-
-    from bot.models.admin_user import AdminUser
-    admin = (await session.execute(
-        select(AdminUser).where(
-            AdminUser.tenant_id == tenant_id,
-            AdminUser.user_id == user_id,
-            AdminUser.is_active == True,
-            AdminUser.deleted_at.is_(None),
-        )
-    )).scalar_one_or_none()
-    return admin is not None
-
-
-async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKeyboardMarkup):
-    """Edita a mensagem atual, se possível."""
-    try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except Exception:
-        await callback.message.answer(text, reply_markup=keyboard)
-    await callback.answer()
-
-
 # ----------------------------------------------------------------------
 # Lista de seções administrativas (título, callback)
 # ----------------------------------------------------------------------
-
 ADMIN_SECTIONS = [
     ("🏠 Configurações Gerais", "admin:general"),
     ("📝 Editor de Textos", "admin:editor_textos"),
@@ -113,20 +66,154 @@ ADMIN_SECTIONS = [
 ]
 
 
+async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
+    """Obtém tenant e usuário a partir do callback."""
+    async with get_async_session_factory() as session:
+        tenant = await get_tenant_for_bot(session, callback.bot.username)
+        if tenant is None:
+            return None, None
+        user = await get_or_create_user(
+            session=session,
+            tenant=tenant,
+            telegram_id=callback.from_user.id,
+            username=callback.from_user.username,
+            first_name=callback.from_user.first_name,
+            last_name=callback.from_user.last_name,
+        )
+        return tenant, user
+
+
+async def _get_tenant_and_user_from_message(message: Message):
+    """Obtém tenant e usuário a partir de mensagem."""
+    async with get_async_session_factory() as session:
+        tenant = await get_tenant_for_bot(session, message.bot.username)
+        if tenant is None:
+            return None, None
+        user = await get_or_create_user(
+            session=session,
+            tenant=tenant,
+            telegram_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+        )
+        return tenant, user
+
+
+async def _is_admin(session, tenant_id: UUID, user_id: UUID) -> bool:
+    """Verifica se o usuário é administrador ou dono no tenant."""
+    user = (await session.execute(
+        select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if user and (user.is_owner or user.is_admin):
+        return True
+
+    from bot.models.admin_user import AdminUser
+    admin = (await session.execute(
+        select(AdminUser).where(
+            AdminUser.tenant_id == tenant_id,
+            AdminUser.user_id == user_id,
+            AdminUser.is_active == True,
+            AdminUser.deleted_at.is_(None),
+        )
+    )).scalar_one_or_none()
+    return admin is not None
+
+
+async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKeyboardMarkup):
+    """Edita a mensagem atual, se possível."""
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except Exception:
+        await callback.message.answer(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.message(Command("admin"))
+async def cmd_admin(message: Message, state: FSMContext):
+    """Comando /admin para abrir o painel administrativo."""
+    tenant, user = await _get_tenant_and_user_from_message(message)
+    if tenant is None:
+        await message.answer("⚠️ Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await message.answer("🚫 Acesso negado.")
+            return
+
+    await show_admin_main_message(message, tenant, user)
+
+
+async def show_admin_main_message(message: Message, tenant, user):
+    """Exibe o menu principal administrativo em uma nova mensagem."""
+    async with get_async_session_factory() as session:
+        total_users = (await session.execute(
+            select(func.count(User.id)).where(
+                User.tenant_id == tenant.id,
+                User.deleted_at.is_(None)
+            )
+        )).scalar_one()
+
+        total_revenue = (await session.execute(
+            select(func.sum(Order.total_cents)).where(
+                Order.tenant_id == tenant.id,
+                Order.status == "COMPLETED",
+                Order.deleted_at.is_(None)
+            )
+        )).scalar_one() or 0
+
+        total_sales = (await session.execute(
+            select(func.count(Order.id)).where(
+                Order.tenant_id == tenant.id,
+                Order.status == "COMPLETED",
+                Order.deleted_at.is_(None)
+            )
+        )).scalar_one()
+
+    text = (
+        "⚙️ CONFIGURAÇÕES ADMINISTRATIVAS\n"
+        f"Admin: {'Sim' if user.is_admin or user.is_owner else 'Não'}\n"
+        f"Dono: {'Sim' if user.is_owner else 'Não'}\n\n"
+        "📊 Dashboard:\n"
+        f"👥 Usuários: {total_users}\n"
+        f"💰 Receita total: {cents_to_brl(int(total_revenue))}\n"
+        f"🛒 Vendas: {total_sales}\n\n"
+        "Selecione uma seção:"
+    )
+
+    buttons = []
+    per_page = 8
+    total_sections = len(ADMIN_SECTIONS)
+    page = 1
+    start = 0
+    end = per_page
+    for title, callback_data in ADMIN_SECTIONS[start:end]:
+        buttons.append([create_button(title, callback_data)])
+
+    # Botões de navegação
+    nav_buttons = []
+    if page < (total_sections + per_page - 1) // per_page:
+        nav_buttons.append(create_button("Próxima ➡️", "admin:page:2"))
+    if nav_buttons:
+        buttons.append(nav_buttons)
+
+    buttons.append([create_button("🔙 VOLTAR", "menu:back")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(text, reply_markup=keyboard)
+
+
 @router.callback_query(F.data == "admin:main")
 @router.callback_query(F.data.startswith("admin:page:"))
 async def show_admin_main(callback: CallbackQuery, state: FSMContext):
     """Exibe o menu principal do painel administrativo com paginação."""
-    tenant, user = await _get_tenant_and_user(callback)
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
         return
 
-    if callback.data == "admin:main":
-        page = 1
-    else:
-        page = int(callback.data.split(":")[-1])
-
+    page = 1 if callback.data == "admin:main" else int(callback.data.split(":")[-1])
     per_page = 8
     total_sections = len(ADMIN_SECTIONS)
     total_pages = (total_sections + per_page - 1) // per_page
@@ -162,7 +249,7 @@ async def show_admin_main(callback: CallbackQuery, state: FSMContext):
 
     text = (
         "⚙️ CONFIGURAÇÕES ADMINISTRATIVAS\n"
-        f"Admin: {'Sim' if await _is_admin(session, tenant.id, user.id) else 'Não'}\n"
+        f"Admin: {'Sim' if user.is_admin or user.is_owner else 'Não'}\n"
         f"Dono: {'Sim' if user.is_owner else 'Não'}\n\n"
         "📊 Dashboard:\n"
         f"👥 Usuários: {total_users}\n"
