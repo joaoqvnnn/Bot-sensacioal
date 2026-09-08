@@ -15,6 +15,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 
+from bot.core.config import settings
 from bot.core.database import get_async_session_factory
 from bot.keyboards.utils import create_button, create_pagination_buttons
 from bot.models.alert import AlertSubscription
@@ -28,8 +29,9 @@ router = Router()
 
 async def _get_tenant_and_user(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -92,7 +94,8 @@ async def show_alerts(callback: CallbackQuery, state: FSMContext, page: int = 1)
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         products_with_status = await _get_products_with_alert_status(session, tenant.id, user.id)
 
     if not products_with_status:
@@ -119,13 +122,10 @@ async def show_alerts(callback: CallbackQuery, state: FSMContext, page: int = 1)
 
     buttons = []
     for product, is_active in page_items:
-        # Texto do botão com estado
         prefix = "✅" if is_active else "❌"
-        # Callback para alternar
         callback_data = f"alerts:toggle:{product.id}:{page}"
         buttons.append([create_button(f"{prefix} {product.name}", callback_data)])
 
-    # Paginação
     nav_buttons = create_pagination_buttons(page, total_pages, "alerts:page")
     if nav_buttons:
         buttons.append(nav_buttons)
@@ -162,8 +162,8 @@ async def toggle_alert(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
-        # Verifica se já existe alerta ativo
+    factory = get_async_session_factory()
+    async with factory() as session:
         stmt = select(AlertSubscription).where(
             AlertSubscription.tenant_id == tenant.id,
             AlertSubscription.user_id == user.id,
@@ -173,12 +173,10 @@ async def toggle_alert(callback: CallbackQuery, state: FSMContext):
         alert = (await session.execute(stmt)).scalar_one_or_none()
 
         if alert:
-            # Inverte estado
             alert.is_active = not alert.is_active
             await session.commit()
             action = "ativado" if alert.is_active else "desativado"
         else:
-            # Cria novo alerta ativo
             new_alert = AlertSubscription(
                 tenant_id=tenant.id,
                 user_id=user.id,
@@ -191,5 +189,4 @@ async def toggle_alert(callback: CallbackQuery, state: FSMContext):
 
         await callback.answer(f"Alerta {action}!")
 
-    # Reexibe a lista de alertas na mesma página
     await show_alerts(callback, state, page)
