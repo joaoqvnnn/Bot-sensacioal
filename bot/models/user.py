@@ -13,10 +13,10 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Uni
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from bot.models.base import FullAuditMixin
+from bot.models.base import Base, FullAuditMixin
 
 
-class User(FullAuditMixin):
+class User(Base, FullAuditMixin):
     """
     Entidade de usuário do sistema.
     """
@@ -53,7 +53,7 @@ class User(FullAuditMixin):
     block_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Segurança
-    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # para saque/ativação
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     whatsapp_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -64,6 +64,12 @@ class User(FullAuditMixin):
     # Relacionamentos
     wallet = relationship("Wallet", back_populates="user", uselist=False)
     ledger_entries = relationship("WalletLedger", back_populates="user")
+    admin_roles = relationship("AdminUser", back_populates="user")
+    support_tickets = relationship("SupportTicket", back_populates="user")
+    notifications = relationship("Notification", back_populates="user")
+    webapp_sessions = relationship("WebAppSession", back_populates="user")
+    whatsapp_messages = relationship("WhatsAppMessage", back_populates="user")
+    delivery_jobs = relationship("DeliveryJob", back_populates="user")
 
     def __repr__(self) -> str:
         return f"<User(tenant_id={self.tenant_id}, telegram_id={self.telegram_id}, username='{self.username}')>"
