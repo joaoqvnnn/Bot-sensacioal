@@ -1,8 +1,5 @@
 """
 Modelo de Tenant (cliente multi-tenant).
-
-Cada tenant representa um cliente que aluga/usa uma instância do bot,
-com seus próprios usuários, produtos, estoque, pagamentos, etc.
 """
 
 import uuid
@@ -10,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from bot.models.base import Base, FullAuditMixin
 
@@ -38,15 +35,6 @@ class Tenant(Base, FullAuditMixin):
 
     # Configurações específicas do tenant
     settings_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Relacionamentos
-    users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
-    wallets = relationship("Wallet", back_populates="tenant", cascade="all, delete-orphan")
-    wallet_ledger_entries = relationship("WalletLedger", back_populates="tenant", cascade="all, delete-orphan")
-
-    categories = relationship("Category", back_populates="tenant", cascade="all, delete-orphan")
-    products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
-    inventory_items = relationship("InventoryItem", back_populates="tenant", cascade="all, delete-orphan")
 
     def is_expired(self) -> bool:
         """Retorna True se o tenant estiver vencido."""
