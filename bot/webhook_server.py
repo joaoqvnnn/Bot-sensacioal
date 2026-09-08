@@ -1,12 +1,13 @@
 """
 Servidor HTTP para receber webhooks do Mercado Pago enquanto roda o bot.
-Inclui validação de assinatura HMAC e inicia bot + servidor no mesmo loop.
+Inclui validação de assinatura HMAC e inicia bot + servidor.
 """
 
 import asyncio
 import hashlib
 import hmac
 import logging
+import threading
 import uvicorn
 
 from aiogram import Bot, Dispatcher
@@ -127,13 +128,12 @@ async def start_bot():
 
 
 if __name__ == "__main__":
-    async def main():
-        bot_task = asyncio.create_task(start_bot())
+    def run_server():
+        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
-        config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
-        server = uvicorn.Server(config)
-        await server.serve()
+    # Inicia servidor HTTP em uma thread separada
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
 
-        await bot_task
-
-    asyncio.run(main())
+    # Inicia o bot no loop principal (polling)
+    asyncio.run(start_bot())
