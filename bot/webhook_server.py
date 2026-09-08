@@ -1,6 +1,7 @@
 """
 Servidor HTTP para receber webhooks do Mercado Pago enquanto roda o bot.
-Inclui validação de assinatura HMAC e apaga webhook do Telegram ao iniciar.
+Inclui validação de assinatura HMAC, criação automática das tabelas no banco,
+e seed de tenant/admin para testes.
 """
 
 import asyncio
@@ -17,11 +18,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from fastapi import FastAPI, Request, HTTPException
 
 from bot.core.config import settings
-from bot.core.database import get_async_session_factory
+from bot.core.database import get_async_engine, get_async_session_factory, Base
 from bot.handlers import register_all_handlers
 from bot.services.payment_service import process_payment_webhook
 from bot.core.logging import setup_logging
 from bot.core.redis import create_redis_client, close_redis_client
+
+# Importa todos os modelos para registrar na metadata
+import bot.models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +79,7 @@ async def mercado_pago_webhook(request: Request):
     from bot.models.tenant import Tenant
     from bot.models.payment import Payment
 
-    async with get_async_session_factory() as session:
+    async with get_async_session_factory()() as session:
         payment = (await session.execute(
             select(Payment).where(Payment.external_payment_id == str(payment_id))
         )).scalar_one_or_none()
@@ -100,6 +104,55 @@ async def mercado_pago_webhook(request: Request):
     return {"status": "processed"}
 
 
+async def setup_database():
+    """Cria as tabelas no banco e insere tenant/admin se necessário."""
+    engine = get_async_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    # Cria um tenant se não existir
+    from sqlalchemy import select
+    from bot.models.tenant import Tenant
+    from bot.models.user import User
+    from datetime import datetime, timezone
+
+    async with get_async_session_factory()() as session:
+        tenant = (await session.execute(
+            select(Tenant).where(Tenant.slug == "loja_teste")
+        )).scalar_one_or_none()
+
+        if not tenant:
+            tenant = Tenant(
+                name="Loja Teste",
+                slug="loja_teste",
+                plan="basic",
+                is_active=True,
+            )
+            session.add(tenant)
+            await session.commit()
+
+        # Cria admin se não existir
+        owner_id = settings.TELEGRAM_OWNER_ID
+        if owner_id:
+            user = (await session.execute(
+                select(User).where(
+                    User.tenant_id == tenant.id,
+                    User.telegram_id == owner_id,
+                )
+            )).scalar_one_or_none()
+
+            if not user:
+                user = User(
+                    tenant_id=tenant.id,
+                    telegram_id=owner_id,
+                    is_owner=True,
+                    is_admin=True,
+                    registered_at=datetime.now(timezone.utc),
+                )
+                session.add(user)
+                await session.commit()
+
+
 async def start_bot():
     """Inicia o bot em polling."""
     print("🚀 Iniciando bot...")
@@ -108,6 +161,9 @@ async def start_bot():
         app_name=settings.APP_NAME,
         env=settings.APP_ENV,
     )
+
+    print("🗄️ Configurando banco de dados...")
+    await setup_database()
 
     print("📡 Conectando ao Telegram...")
     redis_client = await create_redis_client(settings)
