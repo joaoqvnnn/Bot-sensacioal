@@ -5,23 +5,23 @@ Fluxo:
 - Mostra saldo atual e botão para recarregar
 - Usuário informa valor (FSM)
 - Verifica mínimo, máximo e bônus
-- Oferece opções de bônus (se aplicável)
-- Gera pagamento Pix (via payment_service)
-- Exibe QR Code e código copia-e-cola
+- Se bônus desativado, gera Pix diretamente
+- Se bônus ativo, oferece opções de bônus
+- Gera pagamento Pix real e exibe QR Code + Copia e Cola
 """
 
 import logging
 from typing import Optional
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from bot.core.config import settings
 from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl, brl_to_cents
-from bot.keyboards.utils import create_button, add_back_button
+from bot.keyboards.utils import create_button
 from bot.services.user_service import get_tenant_for_bot, get_or_create_user
 from bot.services.wallet_service import get_balance
 from bot.services.payment_service import create_pix_payment
@@ -57,13 +57,14 @@ async def _get_tenant_and_user(message_or_callback):
 
 def get_deposit_config():
     """
-    Retorna configurações de depósito (mínimo, máximo, bônus).
+    Retorna configurações de depósito.
     Futuramente virão do banco de dados (tabela settings).
     """
+    # Valores padrão; podem ser alterados no admin
     min_deposit_cents = int(settings.MERCADO_PAGO_MIN_DEPOSIT * 100)
     max_deposit_cents = int(settings.MERCADO_PAGO_MAX_DEPOSIT * 100)
-    bonus_percent = 0
-    min_bonus_cents = 1000
+    bonus_percent = 0       # 0 = desativado
+    min_bonus_cents = 1000  # R$ 10,00
     return {
         "min_deposit_cents": min_deposit_cents,
         "max_deposit_cents": max_deposit_cents,
@@ -117,10 +118,6 @@ async def ask_amount(callback: CallbackQuery, state: FSMContext):
         "⚠️ Por favor, envie o valor que deseja recarregar agora.\n"
         "Ao realizar um depósito você declara ter lido e estar de acordo com nossos /termos"
     )
-    if config["bonus_percent"] > 0:
-        text += f"\n🎁 Bônus de recarga: {config['bonus_percent']}%"
-    if config["min_bonus_cents"] > 0:
-        text += f"\n❗️ Recarga mínima para ganhar o bônus: {cents_to_brl(config['min_bonus_cents'])}"
 
     await state.set_state(RechargeStates.WAITING_AMOUNT)
 
@@ -163,56 +160,39 @@ async def process_amount(message: Message, state: FSMContext):
 
     bonus_percent = config["bonus_percent"]
     min_bonus = config["min_bonus_cents"]
-    eligible_for_bonus = bonus_percent > 0 and amount_cents >= min_bonus
 
-    if eligible_for_bonus:
-        bonus_cents = int(amount_cents * bonus_percent / 100)
-        final_cents = amount_cents + bonus_cents
-        text = (
-            f"🎁 Eiii, eu tenho algo para você!\n"
-            f"Recarregando {cents_to_brl(amount_cents)} você ganha {bonus_percent}% de bônus "
-            f"(+{cents_to_brl(bonus_cents)}).\n"
-            f"💰 Saldo final: {cents_to_brl(final_cents)}\n\n"
-            "Confirme:"
-        )
-        buttons = [
-            [create_button(f"💠 RECARREGAR {cents_to_brl(amount_cents)}", f"recharge:confirm:{amount_cents}")],
-            [create_button("✏️ DIGITAR OUTRO VALOR", "recharge:pix")],
-            [create_button("🔙 CANCELAR", "menu:recharge")],
-        ]
-    else:
-        if bonus_percent > 0 and amount_cents < min_bonus:
-            missing = min_bonus - amount_cents
-            text = (
-                f"🎁 Eiii, eu tenho algo para você!\n"
-                f"Recarregando {cents_to_brl(min_bonus)} você ganha {bonus_percent}% de bônus "
-                f"(+{cents_to_brl(int(min_bonus * bonus_percent / 100))}), tem certeza que vai perder essa?\n"
-                f"💡 Faltam apenas {cents_to_brl(missing)} para ganhar o bônus!"
-            )
-            buttons = [
-                [create_button(f"💰 CONTINUAR COM {cents_to_brl(amount_cents)}", f"recharge:confirm:{amount_cents}")],
-                [create_button(f"🎁 RECARREGAR {cents_to_brl(min_bonus)} E GANHAR BÔNUS", f"recharge:confirm:{min_bonus}")],
-                [create_button("✏️ DIGITAR OUTRO VALOR", "recharge:pix")],
-                [create_button("🔙 CANCELAR", "menu:recharge")],
-            ]
-        else:
-            text = (
-                f"💰 Recarga de {cents_to_brl(amount_cents)}\n"
-                "Confirme para gerar o Pix."
-            )
-            buttons = [
-                [create_button(f"💠 GERAR PIX {cents_to_brl(amount_cents)}", f"recharge:confirm:{amount_cents}")],
-                [create_button("✏️ DIGITAR OUTRO VALOR", "recharge:pix")],
-                [create_button("🔙 CANCELAR", "menu:recharge")],
-            ]
+    # Se bônus desativado ou valor não atinge mínimo, vai direto para geração
+    if bonus_percent == 0 or amount_cents >= min_bonus:
+        await state.clear()
+        await generate_pix(message, amount_cents, user, tenant)
+        return
+
+    # Se valor abaixo do mínimo para bônus, oferece opções
+    missing = min_bonus - amount_cents
+    bonus_value = int(min_bonus * bonus_percent / 100)
+
+    text = (
+        f"🎁 Eiii, eu tenho algo pra você!\n\n"
+        f"Recarregando {cents_to_brl(min_bonus)} você ganha {bonus_percent}% de bônus "
+        f"(+{cents_to_brl(bonus_value)}), tem certeza que vai perder essa?\n\n"
+        f"💡 Faltam apenas {cents_to_brl(missing)} para ganhar o bônus!"
+    )
+
+    buttons = [
+        [create_button(f"💰 CONTINUAR COM {cents_to_brl(amount_cents)}", f"recharge:confirm:{amount_cents}")],
+        [create_button(f"🎁 RECARREGAR {cents_to_brl(min_bonus)} E GANHAR BÔNUS", f"recharge:confirm:{min_bonus}")],
+        [create_button("✏️ DIGITAR OUTRO VALOR", "recharge:pix")],
+        [create_button("🔙 CANCELAR", "menu:recharge")],
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await state.clear()
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("recharge:confirm:"))
 async def confirm_recharge(callback: CallbackQuery, state: FSMContext):
-    """Confirma recarga, gera pagamento Pix e mostra QR Code."""
+    """Confirma recarga e gera Pix."""
     amount_cents = int(callback.data.split(":")[-1])
 
     tenant, user = await _get_tenant_and_user(callback)
@@ -220,7 +200,12 @@ async def confirm_recharge(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    idempotency_key = f"recharge:{user.id}:{callback.message.message_id}"
+    await generate_pix(callback, amount_cents, user, tenant)
+
+
+async def generate_pix(event, amount_cents: int, user, tenant):
+    """Gera Pix e exibe QR Code + Copia e Cola."""
+    idempotency_key = f"recharge:{user.id}:{id(event)}"
 
     factory = get_async_session_factory()
     async with factory() as session:
@@ -233,50 +218,49 @@ async def confirm_recharge(callback: CallbackQuery, state: FSMContext):
                 bonus_cents=0,
                 idempotency_key=idempotency_key,
             )
-        except NotImplementedError:
-            await callback.message.edit_text(
-                "⚠️ A integração com Mercado Pago ainda não foi configurada.\n"
-                "Não foi possível gerar o Pix. Contate o administrador.",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[create_button("🔙 VOLTAR", "menu:recharge")]]
-                ),
-            )
-            await callback.answer()
-            return
         except Exception as e:
             logger.exception(f"Erro ao criar pagamento: {e}")
-            await callback.message.edit_text(
-                "❌ Ocorreu um erro ao gerar o pagamento. Tente novamente mais tarde.",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[create_button("🔙 VOLTAR", "menu:recharge")]]
-                ),
+            text = "❌ Erro ao gerar pagamento. Tente novamente."
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[[create_button("🔙 VOLTAR", "menu:recharge")]]
             )
-            await callback.answer()
+            if isinstance(event, CallbackQuery):
+                await event.message.edit_text(text, reply_markup=keyboard)
+                await event.answer()
+            else:
+                await event.answer(text, reply_markup=keyboard)
             return
 
+    # Monta mensagem com QR Code e copia-e-cola
     text = (
-        "💰 Comprar Saldo com Pix Automático:\n"
+        "💰 Comprar Saldo com Pix Automático:\n\n"
         f"⏱️ Expira em: {settings.MERCADO_PAGO_EXPIRATION_MINUTES} Minutos\n"
         f"💵 Valor: {cents_to_brl(int(payment.amount_cents))}\n"
-        f"✨ ID da Recarga: {payment.id}\n"
-        "📃 Atenção: Este código é válido para apenas um único pagamento.\n\n"
+        f"✨ ID da Recarga: {payment.id}\n\n"
+        "📃 Atenção: Este código é válido para apenas um único pagamento.\n"
+        "Se você utilizá-lo mais de uma vez, o saldo adicional será perdido sem direito a reembolso.\n\n"
         "💎 Pix Copia e Cola:\n"
         f"<code>{payment.pix_code}</code>\n\n"
         "💡 Dica: Clique no código acima para copiar.\n\n"
         "📊 Dados:\n"
-        f"— 💰 Saldo Atual: {cents_to_brl(0)} (atualizado após pagamento)\n"
+        f"— 💰 Saldo Atual: {cents_to_brl(0)}\n"
         f"— 🎁 Bônus à receber: {cents_to_brl(0)}\n"
-        f"— 💸 Saldo após o pagamento: {cents_to_brl(int(payment.amount_cents))}\n"
+        f"— 💸 Saldo após o pagamento: {cents_to_brl(int(payment.amount_cents))}\n\n"
         "🇧🇷 Após o pagamento, seu saldo será liberado instantaneamente."
     )
 
     buttons = [
-        [create_button("🔄 VERIFICAR PAGAMENTO", f"payment:check:{payment.id}")],
-        [create_button("🔙 VOLTAR", "menu:recharge")],
+        [InlineKeyboardButton("📋 COPIAR PIX", callback_data=f"payment:copy:{payment.id}")],
+        [InlineKeyboardButton("🔄 VERIFICAR PAGAMENTO", callback_data=f"payment:check:{payment.id}")],
+        [InlineKeyboardButton("🔙 VOLTAR", callback_data="menu:recharge")],
     ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    try:
-        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
-    except Exception:
-        await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
-    await callback.answer()
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception:
+            await event.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await event.answer()
+    else:
+        await event.answer(text, reply_markup=keyboard, parse_mode="HTML")
