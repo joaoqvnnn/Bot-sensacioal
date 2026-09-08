@@ -16,6 +16,7 @@ from bot.handlers.payment import router as payment_router
 from bot.handlers.affiliate import router as affiliate_router
 from bot.handlers.profile import router as profile_router
 from bot.handlers.admin import router as admin_router
+from bot.handlers.rankings import router as rankings_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -37,11 +38,12 @@ def register_all_handlers(dp: Dispatcher) -> None:
         affiliate_router,
         profile_router,
         admin_router,
+        rankings_router,
         # Futuros routers serão adicionados aqui:
-        # rankings_router,
         # alerts_router,
         # inline_router,
         # terms_router,
+        # support_router,
     ]
 
     for router in routers:
