@@ -1,14 +1,14 @@
 """
 Handlers administrativos de Transmissões.
 
-Seção 8 do painel: permite criar, listar e cancelar transmissões em massa.
-Suporta texto, foto, vídeo e documento, com agendamento opcional.
-
-Tudo persistido na tabela Broadcast e processado por worker.
+Seção 8 do painel: gerencia transmissões em massa.
+Inclui criação (texto, foto, vídeo, documento), listagem, agendamento,
+cancelamento, pausa/retomada, velocidade de envio, retry, relatório
+e fila de transmissão.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -16,7 +16,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from bot.core.database import get_async_session_factory
 from bot.keyboards.utils import create_button
@@ -35,6 +35,8 @@ class AdminBroadcastStates(StatesGroup):
     WAITING_VIDEO = State()
     WAITING_DOCUMENT = State()
     WAITING_SCHEDULE = State()
+    WAITING_SPEED = State()
+    WAITING_RETRY = State()
 
 
 async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
@@ -114,16 +116,34 @@ async def broadcast_main(callback: CallbackQuery, state: FSMContext):
             return
 
         pending = (await session.execute(
-            select(Broadcast).where(
+            select(func.count(Broadcast.id)).where(
                 Broadcast.tenant_id == tenant.id,
                 Broadcast.status == "PENDING",
                 Broadcast.deleted_at.is_(None),
             )
-        )).scalars().all()
+        )).scalar_one()
+
+        processing = (await session.execute(
+            select(func.count(Broadcast.id)).where(
+                Broadcast.tenant_id == tenant.id,
+                Broadcast.status == "SENDING",
+                Broadcast.deleted_at.is_(None),
+            )
+        )).scalar_one()
+
+        paused = (await session.execute(
+            select(func.count(Broadcast.id)).where(
+                Broadcast.tenant_id == tenant.id,
+                Broadcast.status == "PAUSED",
+                Broadcast.deleted_at.is_(None),
+            )
+        )).scalar_one()
 
     text = (
         "📢 TRANSMISSÕES\n\n"
-        f"Pendentes: {len(pending)}\n\n"
+        f"Pendentes: {pending}\n"
+        f"Enviando: {processing}\n"
+        f"Pausadas: {paused}\n\n"
         "Escolha uma opção:"
     )
     buttons = [
@@ -132,16 +152,22 @@ async def broadcast_main(callback: CallbackQuery, state: FSMContext):
         [create_button("🎥 Enviar vídeo", "broadcast:new:video")],
         [create_button("📄 Enviar documento", "broadcast:new:document")],
         [create_button("📋 Listar transmissões", "broadcast:list")],
+        [create_button("⚙️ Velocidade de envio", "broadcast:speed_menu")],
+        [create_button("🔁 Retry automático", "broadcast:retry_menu")],
         [create_button("🔙 VOLTAR", "admin:main")],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await _edit_or_answer(callback, text, keyboard)
 
 
+# ----------------------------------------------------------------------
+# CRIAÇÃO DE TRANSMISSÃO
+# ----------------------------------------------------------------------
+
 @router.callback_query(F.data.startswith("broadcast:new:"))
 async def broadcast_new(callback: CallbackQuery, state: FSMContext):
     """Inicia criação de nova transmissão."""
-    media_type = callback.data.split(":")[-1]  # text, image, video, document
+    media_type = callback.data.split(":")[-1]
 
     await state.update_data(broadcast_type=media_type)
 
@@ -150,13 +176,13 @@ async def broadcast_new(callback: CallbackQuery, state: FSMContext):
         text = "Digite o texto da transmissão:"
     elif media_type == "image":
         await state.set_state(AdminBroadcastStates.WAITING_IMAGE)
-        text = "Envie a foto da transmissão (como imagem):"
+        text = "Envie a foto da transmissão:"
     elif media_type == "video":
         await state.set_state(AdminBroadcastStates.WAITING_VIDEO)
-        text = "Envie o vídeo da transmissão (como vídeo):"
+        text = "Envie o vídeo da transmissão:"
     elif media_type == "document":
         await state.set_state(AdminBroadcastStates.WAITING_DOCUMENT)
-        text = "Envie o documento da transmissão (como arquivo):"
+        text = "Envie o documento da transmissão:"
     else:
         await callback.answer("Tipo inválido.")
         return
@@ -169,7 +195,7 @@ async def broadcast_new(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminBroadcastStates.WAITING_TEXT)
 async def process_broadcast_text(message: Message, state: FSMContext):
-    """Recebe texto e pergunta se deseja agendar."""
+    """Recebe texto e pergunta agendamento."""
     text = message.text.strip() if message.text else ""
     if not text:
         await message.answer("Texto vazio.")
@@ -178,56 +204,53 @@ async def process_broadcast_text(message: Message, state: FSMContext):
     await state.update_data(message_text=text, image_url=None, video_url=None)
     await state.set_state(AdminBroadcastStates.WAITING_SCHEDULE)
     await message.answer(
-        "Deseja agendar? Envie a data/hora (DD/MM/AAAA HH:MM) ou '0' para enviar imediatamente."
+        "Deseja agendar? Envie data/hora (DD/MM/AAAA HH:MM) ou '0' para imediato."
     )
 
 
 @router.message(AdminBroadcastStates.WAITING_IMAGE)
 async def process_broadcast_image(message: Message, state: FSMContext):
-    """Recebe foto e salva ID/URL."""
+    """Recebe foto."""
     if not message.photo:
         await message.answer("Envie uma foto válida.")
         return
 
-    # Pega a foto de maior resolução
     photo = message.photo[-1]
     file_id = photo.file_id
     await state.update_data(image_url=file_id, message_text=message.caption or "", video_url=None)
     await state.set_state(AdminBroadcastStates.WAITING_SCHEDULE)
-    await message.answer("Foto recebida. Deseja agendar? Envie data/hora ou '0'.")
+    await message.answer("Foto recebida. Agendar? (DD/MM/AAAA HH:MM) ou '0'.")
 
 
 @router.message(AdminBroadcastStates.WAITING_VIDEO)
 async def process_broadcast_video(message: Message, state: FSMContext):
-    """Recebe vídeo e salva ID/URL."""
+    """Recebe vídeo."""
     if not message.video:
         await message.answer("Envie um vídeo válido.")
         return
 
-    video = message.video
-    file_id = video.file_id
+    file_id = message.video.file_id
     await state.update_data(video_url=file_id, message_text=message.caption or "", image_url=None)
     await state.set_state(AdminBroadcastStates.WAITING_SCHEDULE)
-    await message.answer("Vídeo recebido. Deseja agendar? Envie data/hora ou '0'.")
+    await message.answer("Vídeo recebido. Agendar? (DD/MM/AAAA HH:MM) ou '0'.")
 
 
 @router.message(AdminBroadcastStates.WAITING_DOCUMENT)
 async def process_broadcast_document(message: Message, state: FSMContext):
-    """Recebe documento e salva ID/URL."""
+    """Recebe documento."""
     if not message.document:
         await message.answer("Envie um documento válido.")
         return
 
-    document = message.document
-    file_id = document.file_id
+    file_id = message.document.file_id
     await state.update_data(video_url=file_id, message_text=message.caption or "", image_url=None)
     await state.set_state(AdminBroadcastStates.WAITING_SCHEDULE)
-    await message.answer("Documento recebido. Deseja agendar? Envie data/hora ou '0'.")
+    await message.answer("Documento recebido. Agendar? (DD/MM/AAAA HH:MM) ou '0'.")
 
 
 @router.message(AdminBroadcastStates.WAITING_SCHEDULE)
 async def process_broadcast_schedule(message: Message, state: FSMContext):
-    """Recebe agendamento e cria Broadcast."""
+    """Recebe agendamento e cria a transmissão."""
     schedule_text = message.text.strip() if message.text else "0"
     scheduled_at = None
     if schedule_text != "0":
@@ -235,7 +258,7 @@ async def process_broadcast_schedule(message: Message, state: FSMContext):
             scheduled_at = datetime.strptime(schedule_text, "%d/%m/%Y %H:%M")
             scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
         except ValueError:
-            await message.answer("Data/hora inválida. Use DD/MM/AAAA HH:MM ou 0.")
+            await message.answer("Data inválida.")
             return
 
     data = await state.get_data()
@@ -256,6 +279,10 @@ async def process_broadcast_schedule(message: Message, state: FSMContext):
             await state.clear()
             return
 
+        # Valores de velocidade e retry (default)
+        speed = int(await _get_setting(session, tenant.id, "broadcast_speed_per_second") or "5")
+        retry = int(await _get_setting(session, tenant.id, "broadcast_retry") or "3")
+
         broadcast = Broadcast(
             tenant_id=tenant.id,
             title=f"Transmissão {broadcast_type}",
@@ -272,9 +299,13 @@ async def process_broadcast_schedule(message: Message, state: FSMContext):
     await message.answer("✅ Transmissão criada com sucesso!")
 
 
+# ----------------------------------------------------------------------
+# LISTAGEM E CONTROLE
+# ----------------------------------------------------------------------
+
 @router.callback_query(F.data == "broadcast:list")
 async def broadcast_list(callback: CallbackQuery, state: FSMContext):
-    """Lista transmissões recentes."""
+    """Lista transmissões recentes e controles."""
     tenant, user = await _get_tenant_and_user_from_callback(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
@@ -285,22 +316,305 @@ async def broadcast_list(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Acesso negado.", show_alert=True)
             return
 
-        stmt = select(Broadcast).where(
-            Broadcast.tenant_id == tenant.id,
-            Broadcast.deleted_at.is_(None),
-        ).order_by(Broadcast.created_at.desc()).limit(10)
-        result = await session.execute(stmt)
-        broadcasts = list(result.scalars().all())
+        broadcasts = (await session.execute(
+            select(Broadcast)
+            .where(
+                Broadcast.tenant_id == tenant.id,
+                Broadcast.deleted_at.is_(None),
+            )
+            .order_by(Broadcast.created_at.desc())
+            .limit(10)
+        )).scalars().all()
 
     if not broadcasts:
-        text = "Nenhuma transmissão encontrada."
+        text = "Nenhuma transmissão."
     else:
         text = "📋 Últimas transmissões:\n\n"
+        buttons = []
         for b in broadcasts:
-            status_emoji = "🟢" if b.status == "COMPLETED" else "🔴"
-            sched = f" (agendada para {b.scheduled_at.strftime('%d/%m/%Y %H:%M')})" if b.scheduled_at else ""
-            text += f"{status_emoji} {b.title}{sched}\n"
+            status_emoji = {
+                "PENDING": "🟡",
+                "SENDING": "🔵",
+                "PAUSED": "⏸",
+                "COMPLETED": "🟢",
+                "FAILED": "🔴",
+                "CANCELLED": "⚫",
+            }.get(b.status, "⚪")
+            text += f"{status_emoji} {b.title} - {b.status}\n"
+            # Adiciona controles por transmissão
+            buttons.append([create_button(f"🎛 {b.title}", f"broadcast:control:{b.id}")])
 
-    buttons = [[create_button("🔙 VOLTAR", "broadcast:main")]]
+    buttons.append([create_button("🔙 VOLTAR", "broadcast:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await _edit_or_answer(callback, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("broadcast:control:"))
+async def broadcast_control(callback: CallbackQuery, state: FSMContext):
+    """Menu de controle de uma transmissão."""
+    broadcast_id = UUID(callback.data.split(":")[-1])
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        broadcast = (await session.execute(
+            select(Broadcast).where(Broadcast.id == broadcast_id, Broadcast.tenant_id == tenant.id)
+        )).scalar_one_or_none()
+
+    if broadcast is None:
+        await callback.answer("Transmissão não encontrada.")
+        return
+
+    text = (
+        f"🎛 Controle: <b>{broadcast.title}</b>\n"
+        f"Status: {broadcast.status}\n\n"
+        "Escolha uma ação:"
+    )
+    buttons = []
+    if broadcast.status in ("PENDING", "PAUSED"):
+        buttons.append([create_button("▶️ Iniciar/Retomar", f"broadcast:resume:{broadcast.id}")])
+    if broadcast.status == "SENDING":
+        buttons.append([create_button("⏸ Pausar", f"broadcast:pause:{broadcast.id}")])
+    if broadcast.status in ("PENDING", "PAUSED", "SENDING"):
+        buttons.append([create_button("❌ Cancelar", f"broadcast:cancel:{broadcast.id}")])
+    buttons.append([create_button("📊 Relatório", f"broadcast:report:{broadcast.id}")])
+    buttons.append([create_button("🔙 VOLTAR", "broadcast:list")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await _edit_or_answer(callback, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("broadcast:cancel:"))
+async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
+    """Cancela transmissão."""
+    broadcast_id = UUID(callback.data.split(":")[-1])
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        broadcast = (await session.execute(
+            select(Broadcast).where(Broadcast.id == broadcast_id, Broadcast.tenant_id == tenant.id)
+        )).scalar_one_or_none()
+        if broadcast:
+            broadcast.status = "CANCELLED"
+            await session.commit()
+            await callback.answer("Transmissão cancelada.")
+        else:
+            await callback.answer("Transmissão não encontrada.")
+
+    await broadcast_list(callback, state)
+
+
+@router.callback_query(F.data.startswith("broadcast:pause:"))
+async def broadcast_pause(callback: CallbackQuery, state: FSMContext):
+    """Pausa transmissão."""
+    broadcast_id = UUID(callback.data.split(":")[-1])
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        broadcast = (await session.execute(
+            select(Broadcast).where(Broadcast.id == broadcast_id, Broadcast.tenant_id == tenant.id)
+        )).scalar_one_or_none()
+        if broadcast:
+            broadcast.status = "PAUSED"
+            await session.commit()
+            await callback.answer("Transmissão pausada.")
+        else:
+            await callback.answer("Transmissão não encontrada.")
+
+    await broadcast_control(callback, state)
+
+
+@router.callback_query(F.data.startswith("broadcast:resume:"))
+async def broadcast_resume(callback: CallbackQuery, state: FSMContext):
+    """Retoma transmissão pausada."""
+    broadcast_id = UUID(callback.data.split(":")[-1])
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        broadcast = (await session.execute(
+            select(Broadcast).where(Broadcast.id == broadcast_id, Broadcast.tenant_id == tenant.id)
+        )).scalar_one_or_none()
+        if broadcast:
+            broadcast.status = "SENDING"
+            await session.commit()
+            await callback.answer("Transmissão retomada.")
+        else:
+            await callback.answer("Transmissão não encontrada.")
+
+    await broadcast_control(callback, state)
+
+
+@router.callback_query(F.data.startswith("broadcast:report:"))
+async def broadcast_report(callback: CallbackQuery, state: FSMContext):
+    """Exibe relatório de envio (simplificado)."""
+    broadcast_id = UUID(callback.data.split(":")[-1])
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        # Por ora, não temos tabela de entregas por broadcast; apenas status geral.
+        broadcast = (await session.execute(
+            select(Broadcast).where(Broadcast.id == broadcast_id, Broadcast.tenant_id == tenant.id)
+        )).scalar_one_or_none()
+
+    if broadcast is None:
+        await callback.answer("Transmissão não encontrada.")
+        return
+
+    text = (
+        f"📊 Relatório da transmissão:\n\n"
+        f"Título: {broadcast.title}\n"
+        f"Status: {broadcast.status}\n"
+        f"Criada em: {broadcast.created_at.strftime('%d/%m/%Y %H:%M')}\n"
+        f"Agendada: {broadcast.scheduled_at.strftime('%d/%m/%Y %H:%M') if broadcast.scheduled_at else 'Não'}\n"
+        f"Enviada: {broadcast.sent_at.strftime('%d/%m/%Y %H:%M') if broadcast.sent_at else 'Não'}\n"
+        "\n(Relatório detalhado de enviados/falhas será integrado com worker)"
+    )
+    buttons = [[create_button("🔙 VOLTAR", "broadcast:list")]]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await _edit_or_answer(callback, text, keyboard)
+
+
+# ----------------------------------------------------------------------
+# VELOCIDADE E RETRY
+# ----------------------------------------------------------------------
+
+@router.callback_query(F.data == "broadcast:speed_menu")
+async def speed_menu(callback: CallbackQuery, state: FSMContext):
+    """Menu de velocidade de envio."""
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+        current = await _get_setting(session, tenant.id, "broadcast_speed_per_second") or "5"
+
+    text = (
+        "⚙️ Velocidade de envio\n\n"
+        f"Limite por segundo: {current}\n\n"
+        "Digite novo valor:"
+    )
+    await state.set_state(AdminBroadcastStates.WAITING_SPEED)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[create_button("🔙 CANCELAR", "broadcast:main")]]
+    )
+    await _edit_or_answer(callback, text, keyboard)
+
+
+@router.message(AdminBroadcastStates.WAITING_SPEED)
+async def process_speed(message: Message, state: FSMContext):
+    """Salva nova velocidade."""
+    try:
+        speed = int(message.text.strip())
+        if speed < 1 or speed > 50:
+            raise ValueError
+    except ValueError:
+        await message.answer("Valor inválido (1-50).")
+        return
+
+    tenant, admin = await _get_tenant_and_user_from_message(message)
+    if tenant is None:
+        await message.answer("Sistema indisponível.")
+        await state.clear()
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, admin.id):
+            await message.answer("Acesso negado.")
+            await state.clear()
+            return
+        await _set_setting(session, tenant.id, "broadcast_speed_per_second", str(speed))
+
+    await state.clear()
+    await message.answer(f"✅ Velocidade atualizada para {speed}/s.")
+
+
+@router.callback_query(F.data == "broadcast:retry_menu")
+async def retry_menu(callback: CallbackQuery, state: FSMContext):
+    """Menu de retry automático."""
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+        current = await _get_setting(session, tenant.id, "broadcast_retry") or "3"
+
+    text = (
+        "🔁 Retry automático\n\n"
+        f"Tentativas: {current}\n\n"
+        "Digite novo número de tentativas:"
+    )
+    await state.set_state(AdminBroadcastStates.WAITING_RETRY)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[create_button("🔙 CANCELAR", "broadcast:main")]]
+    )
+    await _edit_or_answer(callback, text, keyboard)
+
+
+@router.message(AdminBroadcastStates.WAITING_RETRY)
+async def process_retry(message: Message, state: FSMContext):
+    """Salva novo valor de retry."""
+    try:
+        retry = int(message.text.strip())
+        if retry < 0 or retry > 10:
+            raise ValueError
+    except ValueError:
+        await message.answer("Valor inválido (0-10).")
+        return
+
+    tenant, admin = await _get_tenant_and_user_from_message(message)
+    if tenant is None:
+        await message.answer("Sistema indisponível.")
+        await state.clear()
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, admin.id):
+            await message.answer("Acesso negado.")
+            await state.clear()
+            return
+        await _set_setting(session, tenant.id, "broadcast_retry", str(retry))
+
+    await state.clear()
+    await message.answer(f"✅ Retry atualizado para {retry} tentativas.")
