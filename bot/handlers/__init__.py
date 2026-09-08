@@ -30,12 +30,13 @@ from bot.handlers.admin_editor_textos import router as admin_editor_textos_route
 from bot.handlers.admin_buttons import router as admin_buttons_router
 from bot.handlers.admin_placeholders import router as admin_placeholders_router
 from bot.handlers.admin_admins import router as admin_admins_router
+from bot.handlers.admin_user import router as admin_users_router  # nome atual
 from bot.handlers.admin_bonus import router as admin_bonus_router
 from bot.handlers.admin_broadcast import router as admin_broadcast_router
 from bot.handlers.admin_scheduler import router as admin_scheduler_router
 from bot.handlers.admin_categories import router as admin_categories_router
 from bot.handlers.admin_products import router as admin_products_router
-from bot.handlers.admin_inventory import router as admin_inventory_router
+from bot.handlers.admin_stock import router as admin_inventory_router  # nome atual
 from bot.handlers.admin_reservation import router as admin_reservation_router
 from bot.handlers.admin_payments import router as admin_payments_router
 from bot.handlers.admin_wallet import router as admin_wallet_router
@@ -81,6 +82,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
         admin_buttons_router,
         admin_placeholders_router,
         admin_admins_router,
+        admin_users_router,
         admin_bonus_router,
         admin_broadcast_router,
         admin_scheduler_router,
