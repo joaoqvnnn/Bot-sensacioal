@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Ambiente virtual
+venv/
+env/
+.venv/
+
+# Variáveis de ambiente
+.env
+
+# Logs
+logs/
+
+# Docker
+*.log
+
+# IDEs
+.vscode/
+.idea/
+
+# Arquivos de banco de dados
+*.sqlite3
+*.db
+
+# Alembic
+migrations/versions/*.pyc
