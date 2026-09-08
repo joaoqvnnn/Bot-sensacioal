@@ -1,17 +1,17 @@
 """
 Handlers administrativos do Editor de Textos.
 
-Permite ao administrador editar todas as mensagens do bot:
-- /start, canal obrigatório, catálogo, produto, compra, Pix, perfil,
-  histórico, Gift Card, recarga, afiliados, saques, rankings, alertas,
-  manutenção, anti-flood, erros, sucesso, etc.
+Seção 2 do painel: permite editar todas as mensagens do bot,
+incluindo /start, canal obrigatório, catálogo, produto, compra,
+Pix, perfil, histórico, Gift Card, recarga, afiliados, saques,
+rankings, alertas, manutenção, anti-flood, erros e sucesso.
 
-Tudo persistido na tabela Settings, com validação de placeholders.
+Com paginação real e validação de placeholders.
 """
 
 import logging
 import re
-from typing import Optional
+from typing import Optional, List, Tuple
 from uuid import UUID
 
 from aiogram import F, Router
@@ -21,7 +21,7 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
 
 from bot.core.database import get_async_session_factory
-from bot.keyboards.utils import create_button
+from bot.keyboards.utils import create_button, create_pagination_buttons
 from bot.models.settings import Settings
 from bot.models.user import User
 from bot.services.user_service import get_tenant_for_bot, get_or_create_user
@@ -31,7 +31,11 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-# Lista de mensagens editáveis (código -> título)
+class EditorTextosStates(StatesGroup):
+    WAITING_MESSAGE = State()
+
+
+# Lista completa de mensagens editáveis (código -> título)
 EDITABLE_MESSAGES = {
     "start_message": "Mensagem /start",
     "mandatory_channel_message": "Mensagem de canal obrigatório",
@@ -66,8 +70,8 @@ EDITABLE_MESSAGES = {
     "delivery_message": "Mensagem de entrega",
     "maintenance_message": "Mensagem de manutenção",
     "antiflood_message": "Mensagem de anti-flood",
-    "error_message": "Mensagens de erro",
-    "success_message": "Mensagens de sucesso",
+    "error_message": "Mensagem de erro",
+    "success_message": "Mensagem de sucesso",
 }
 
 # Placeholders permitidos (validação)
@@ -79,10 +83,6 @@ ALLOWED_PLACEHOLDERS = {
     "referral_count", "commission_balance", "withdrawal_min",
     "tenant_id", "plan", "bot_version",
 }
-
-
-class EditorTextosStates(StatesGroup):
-    WAITING_MESSAGE = State()
 
 
 async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
@@ -140,7 +140,7 @@ async def _is_admin(session, tenant_id: UUID, user_id: UUID) -> bool:
 
 
 async def _get_setting(session, tenant_id: UUID, key: str) -> Optional[str]:
-    """Busca valor de configuração por chave."""
+    """Busca valor de configuração."""
     stmt = select(Settings).where(
         Settings.tenant_id == tenant_id,
         Settings.key == key,
@@ -176,18 +176,14 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKe
 
 
 def _validate_placeholders(text: str) -> list:
-    """
-    Valida placeholders no texto.
-    Retorna lista de placeholders inválidos.
-    """
+    """Valida placeholders no texto."""
     found = set(re.findall(r"\{(.*?)\}", text))
-    invalid = [p for p in found if p not in ALLOWED_PLACEHOLDERS]
-    return invalid
+    return [p for p in found if p not in ALLOWED_PLACEHOLDERS]
 
 
 @router.callback_query(F.data == "admin:editor_textos")
 async def show_editor_textos(callback: CallbackQuery, state: FSMContext):
-    """Exibe o menu de edição de textos."""
+    """Exibe o menu de edição de textos com paginação."""
     tenant, user = await _get_tenant_and_user_from_callback(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
@@ -198,11 +194,10 @@ async def show_editor_textos(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Acesso negado.", show_alert=True)
             return
 
-    # Divide em páginas (10 itens por página)
     items = list(EDITABLE_MESSAGES.items())
     per_page = 8
     total_pages = (len(items) + per_page - 1) // per_page
-    page = 1  # simplificação: primeira página
+    page = 1
 
     start = (page - 1) * per_page
     end = start + per_page
@@ -213,17 +208,11 @@ async def show_editor_textos(callback: CallbackQuery, state: FSMContext):
     for code, title in page_items:
         buttons.append([create_button(title, f"text_editor:edit:{code}")])
 
-    # Botões de navegação simplificados
-    nav = []
-    if page > 1:
-        nav.append(create_button("⬅️ Anterior", f"text_editor:page:{page-1}"))
-    nav.append(create_button(f"{page}/{total_pages}", "none"))
-    if page < total_pages:
-        nav.append(create_button("Próxima ➡️", f"text_editor:page:{page+1}"))
+    nav = create_pagination_buttons(page, total_pages, "text_editor:page")
     if nav:
         buttons.append(nav)
-
     buttons.append([create_button("🔙 VOLTAR", "admin:main")])
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await _edit_or_answer(callback, text, keyboard)
 
@@ -232,8 +221,37 @@ async def show_editor_textos(callback: CallbackQuery, state: FSMContext):
 async def text_editor_page(callback: CallbackQuery, state: FSMContext):
     """Trata paginação do editor de textos."""
     page = int(callback.data.split(":")[-1])
-    # Reexecuta com a página solicitada
-    await show_editor_textos(callback, state)  # simplificado, mas sem página real
+    tenant, user = await _get_tenant_and_user_from_callback(callback)
+    if tenant is None:
+        await callback.answer("Sistema indisponível.")
+        return
+
+    async with get_async_session_factory() as session:
+        if not await _is_admin(session, tenant.id, user.id):
+            await callback.answer("Acesso negado.", show_alert=True)
+            return
+
+    items = list(EDITABLE_MESSAGES.items())
+    per_page = 8
+    total_pages = (len(items) + per_page - 1) // per_page
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_items = items[start:end]
+
+    text = "📝 EDITOR DE TEXTOS\n\nSelecione a mensagem para editar:\n"
+    buttons = []
+    for code, title in page_items:
+        buttons.append([create_button(title, f"text_editor:edit:{code}")])
+
+    nav = create_pagination_buttons(page, total_pages, "text_editor:page")
+    if nav:
+        buttons.append(nav)
+    buttons.append([create_button("🔙 VOLTAR", "admin:main")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await _edit_or_answer(callback, text, keyboard)
 
 
 @router.callback_query(F.data.startswith("text_editor:edit:"))
@@ -251,7 +269,6 @@ async def edit_message_text(callback: CallbackQuery, state: FSMContext):
         if not await _is_admin(session, tenant.id, user.id):
             await callback.answer("Acesso negado.", show_alert=True)
             return
-
         current = await _get_setting(session, tenant.id, code) or ""
 
     await state.set_state(EditorTextosStates.WAITING_MESSAGE)
@@ -277,7 +294,6 @@ async def process_message_text(message: Message, state: FSMContext):
         await message.answer("Texto vazio não permitido.")
         return
 
-    # Valida placeholders
     invalid = _validate_placeholders(new_text)
     if invalid:
         await message.answer(
