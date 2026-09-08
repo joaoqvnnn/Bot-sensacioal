@@ -22,6 +22,12 @@ from bot.handlers.admin_stock import router as admin_stock_router
 from bot.handlers.admin_users import router as admin_users_router
 from bot.handlers.admin_anti_flood import router as admin_anti_flood_router
 from bot.handlers.admin_notifications import router as admin_notifications_router
+from bot.handlers.admin_general import router as admin_general_router
+from bot.handlers.admin_editor_textos import router as admin_editor_textos_router
+from bot.handlers.admin_buttons import router as admin_buttons_router
+from bot.handlers.admin_placeholders import router as admin_placeholders_router
+from bot.handlers.admin_admins import router as admin_admins_router
+from bot.handlers.admin_bonus import router as admin_bonus_router
 from bot.handlers.rankings import router as rankings_router
 from bot.handlers.alerts import router as alerts_router
 from bot.handlers.inline import router as inline_router
@@ -39,7 +45,6 @@ def register_all_handlers(dp: Dispatcher) -> None:
     Raises:
         ValueError: Se houver conflito de handlers (por exemplo, comandos duplicados).
     """
-    # Lista de routers a registrar
     routers = [
         start_router,
         catalog_router,
@@ -54,6 +59,12 @@ def register_all_handlers(dp: Dispatcher) -> None:
         admin_users_router,
         admin_anti_flood_router,
         admin_notifications_router,
+        admin_general_router,
+        admin_editor_textos_router,
+        admin_buttons_router,
+        admin_placeholders_router,
+        admin_admins_router,
+        admin_bonus_router,
         rankings_router,
         alerts_router,
         inline_router,
