@@ -11,6 +11,7 @@ from aiogram import Dispatcher
 
 from bot.handlers.start import router as start_router
 from bot.handlers.catalog import router as catalog_router
+from bot.handlers.recharge import router as recharge_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -27,8 +28,10 @@ def register_all_handlers(dp: Dispatcher) -> None:
     routers = [
         start_router,
         catalog_router,
+        recharge_router,
         # Futuros routers serão adicionados aqui:
         # profile_router,
+        # payment_router,
         # admin_router,
     ]
 
