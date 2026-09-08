@@ -32,7 +32,8 @@ router = Router()
 
 async def _get_tenant_and_user(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         tenant = await get_tenant_for_bot(session, callback.bot.username)
         if tenant is None:
             return None, None
@@ -50,7 +51,6 @@ async def _get_tenant_and_user(callback: CallbackQuery):
 async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKeyboardMarkup):
     """
     Edita a mensagem atual se possível, caso contrário envia uma nova.
-    Respeita a regra de mensagem única, editando a mensagem do callback.
     """
     try:
         await callback.message.edit_text(text, reply_markup=keyboard)
@@ -61,15 +61,14 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKe
 
 @router.callback_query(F.data == "menu:catalog")
 async def show_categories(callback: CallbackQuery, state: FSMContext):
-    """
-    Exibe a lista de categorias disponíveis.
-    """
+    """Exibe a lista de categorias disponíveis."""
     tenant, user = await _get_tenant_and_user(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         categories = await list_categories(session, tenant.id)
         balance_cents = await get_balance(session, tenant.id, user.id)
 
@@ -99,16 +98,15 @@ async def show_categories(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("catalog:category:"))
 async def show_products(callback: CallbackQuery, state: FSMContext):
-    """
-    Exibe os produtos de uma categoria selecionada.
-    """
+    """Exibe os produtos de uma categoria selecionada."""
     category_id = callback.data.split(":")[-1]
     tenant, user = await _get_tenant_and_user(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         products = await list_products_by_category(session, tenant.id, UUID(category_id))
         balance_cents = await get_balance(session, tenant.id, user.id)
 
@@ -137,16 +135,15 @@ async def show_products(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("catalog:product:"))
 async def show_product_details(callback: CallbackQuery, state: FSMContext):
-    """
-    Exibe os detalhes de um produto.
-    """
+    """Exibe os detalhes de um produto."""
     product_id = callback.data.split(":")[-1]
     tenant, user = await _get_tenant_and_user(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         product_info = await get_product_with_stock_info(session, tenant.id, UUID(product_id))
         balance_cents = await get_balance(session, tenant.id, user.id)
 
@@ -158,7 +155,6 @@ async def show_product_details(callback: CallbackQuery, state: FSMContext):
         await _edit_or_answer(callback, text, keyboard)
         return
 
-    # Monta detalhes
     stock = product_info["available_stock"]
     if stock <= 0:
         stock_text = "🔴 Sem estoque"
@@ -187,17 +183,13 @@ async def show_product_details(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("catalog:buy:"))
 async def buy_product(callback: CallbackQuery, state: FSMContext):
-    """
-    Inicia o fluxo de compra (ainda simplificado, sem quantidade múltipla).
-    """
+    """Inicia o fluxo de compra (ainda simplificado)."""
     product_id = callback.data.split(":")[-1]
     tenant, user = await _get_tenant_and_user(callback)
     if tenant is None:
         await callback.answer("Sistema indisponível.")
         return
 
-    # Aqui futuramente chamaremos o purchase_service.purchase_product
-    # Por enquanto, apenas mostra mensagem de que a compra será implementada.
     text = "🛒 Em breve: fluxo de compra integrado com estoque e pagamento."
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
