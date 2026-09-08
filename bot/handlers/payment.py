@@ -30,7 +30,8 @@ router = Router()
 async def _get_tenant_and_user(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
     factory = get_async_session_factory()
-    async with factory() as get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -46,11 +47,7 @@ async def _get_tenant_and_user(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("payment:check:"))
 async def check_payment(callback: CallbackQuery, state: FSMContext):
-    """
-    Verifica o status de um pagamento Pix e mostra o resultado.
-
-    Callback data: payment:check:<payment_id>
-    """
+    """Verifica o status de um pagamento Pix."""
     payment_id_str = callback.data.split(":")[-1]
     try:
         payment_id = UUID(payment_id_str)
@@ -120,10 +117,7 @@ async def check_payment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("payment:copy:"))
 async def copy_pix(callback: CallbackQuery, state: FSMContext):
-    """
-    Envia o código Pix copia-e-cola como mensagem separada (para facilitar cópia).
-    Não edita a mensagem atual, apenas responde com o código.
-    """
+    """Envia o código Pix copia-e-cola como mensagem separada."""
     payment_id_str = callback.data.split(":")[-1]
     try:
         payment_id = UUID(payment_id_str)
