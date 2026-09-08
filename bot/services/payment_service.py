@@ -2,7 +2,7 @@
 Serviço de pagamentos Pix via Mercado Pago.
 
 Fornece funções para:
-- Criar cobrança Pix (QR Code e código copia-e-cola)
+- Criar cobrança Pix (QR Code e código copia-e-cola) usando cliente real
 - Processar webhook de confirmação do provedor com idempotência
 - Confirmar pagamento (PAID) e creditar carteira
 - Marcar como expirado/falho/cancelado
@@ -22,34 +22,16 @@ from bot.core.config import settings
 from bot.models.payment import Payment
 from bot.models.user import User
 from bot.services.wallet_service import credit_wallet
+from bot.integrations.mercadopago import MercadoPagoClient, MercadoPagoError
 
 logger = logging.getLogger(__name__)
 
 
-# ----------------------------------------------------------------------
-# Funções auxiliares internas (serão conectadas ao cliente real)
-# ----------------------------------------------------------------------
-
-async def _create_pix_charge_via_provider(amount_cents: int, expires_at: datetime) -> dict:
-    """
-    Cria uma cobrança Pix no provedor (Mercado Pago).
-
-    Esta função deve ser implementada com a API real.
-    Por enquanto, levanta NotImplementedError até que a integração
-    seja concluída no módulo bot.integrations.mercadopago.
-
-    Args:
-        amount_cents: Valor em centavos.
-        expires_at: Data de expiração.
-
-    Returns:
-        dict: Dados da cobrança (external_payment_id, qr_code_url, pix_code).
-    """
-    # TODO: Implementar chamada real à API do Mercado Pago.
-    raise NotImplementedError("Integração com Mercado Pago ainda não implementada.")
-
-
-def _get_payment_by_idempotency_key(session, tenant_id, idempotency_key):
+async def _get_payment_by_idempotency_key(
+    session: AsyncSession,
+    tenant_id: UUID,
+    idempotency_key: str,
+) -> Optional[Payment]:
     """Busca pagamento existente pela chave de idempotência."""
     stmt = select(Payment).where(
         Payment.tenant_id == tenant_id,
@@ -59,10 +41,6 @@ def _get_payment_by_idempotency_key(session, tenant_id, idempotency_key):
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
-
-# ----------------------------------------------------------------------
-# CRIAÇÃO DE PAGAMENTO
-# ----------------------------------------------------------------------
 
 async def create_pix_payment(
     session: AsyncSession,
@@ -116,26 +94,35 @@ async def create_pix_payment(
     session.add(payment)
     await session.flush()  # obtém ID
 
-    # Tenta criar cobrança no provedor
+    # Cria cobrança no provedor
     try:
-        provider_data = await _create_pix_charge_via_provider(amount_cents, expires_at)
+        mp_client = MercadoPagoClient()  # usa token do settings
+        provider_data = await mp_client.create_pix_payment(
+            amount_cents=amount_cents,
+            description="Recarga de saldo",
+            expiration_minutes=expiration_minutes,
+            idempotency_key=idempotency_key,
+        )
         payment.external_payment_id = provider_data.get("external_payment_id")
         payment.qr_code_url = provider_data.get("qr_code_url")
         payment.pix_code = provider_data.get("pix_code")
-    except NotImplementedError:
-        # Marcar como FAILED? Não; manter PENDING para depois integrar.
-        # Em produção, isso não deve ocorrer.
-        logger.warning("Cliente Mercado Pago não implementado; pagamento permanece PENDING sem dados do provedor.")
+        payment.provider_response = None  # pode armazenar resposta se quiser
+    except MercadoPagoError as e:
+        logger.error(f"Erro ao criar cobrança Pix no Mercado Pago: {e}")
+        # Mantém pagamento PENDING sem dados do provedor; poderá ser cancelado
+        # em versão futura.
+        # Se preferir, pode marcar como FAILED e levantar exceção.
+        payment.status = "FAILED"
+        payment.provider_response = str(e)
+        await session.commit()
+        await session.refresh(payment)
+        raise e
 
     await session.commit()
     await session.refresh(payment)
     logger.info(f"Pagamento criado: id={payment.id}, amount={amount_cents}, user_id={user_id}")
     return payment
 
-
-# ----------------------------------------------------------------------
-# PROCESSAMENTO DE WEBHOOK
-# ----------------------------------------------------------------------
 
 async def process_payment_webhook(
     session: AsyncSession,
@@ -237,10 +224,6 @@ async def _mark_payment_as_paid(session: AsyncSession, payment: Payment) -> None
 
     logger.info(f"Pagamento {payment.id} confirmado. Carteira creditada para user_id={payment.user_id}.")
 
-
-# ----------------------------------------------------------------------
-# CONSULTAS
-# ----------------------------------------------------------------------
 
 async def get_payment_by_id(
     session: AsyncSession,
