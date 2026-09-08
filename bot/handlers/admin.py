@@ -10,6 +10,7 @@ Painel inicial do administrador/dono, com:
 - Gerenciamento de produtos/estoque (adicionar/remover logins)
 - Edição de mensagens e mídias (templates, imagens)
 - Anti-flood e manutenção
+- Notificações programadas
 
 Tudo editando a mesma mensagem, com botões de voltar.
 """
@@ -30,10 +31,8 @@ from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button
 from bot.models.admin_user import AdminUser
-from bot.models.affiliate import AffiliatePoints
 from bot.models.order import Order
 from bot.models.user import User
-from bot.models.tenant import Tenant
 from bot.models.settings import Settings
 from bot.services.user_service import get_tenant_for_bot, get_or_create_user
 
@@ -178,6 +177,7 @@ async def show_admin_main(callback: CallbackQuery, state: FSMContext):
         [create_button("✏️ MENSAGENS/MÍDIAS", "admin:messages")],
         [create_button("🛡 ANTI-FLOOD", "admin:antiflood")],
         [create_button("🔧 MANUTENÇÃO", "admin:maintenance")],
+        [create_button("📢 NOTIFICAÇÕES", "admin:notifications")],
         [create_button("🔙 VOLTAR", "menu:back")],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
