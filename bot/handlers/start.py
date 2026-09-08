@@ -8,6 +8,7 @@ Fluxo:
 """
 
 import logging
+import json
 from typing import Optional
 
 from aiogram import Bot, F, Router
@@ -23,6 +24,7 @@ from bot.services.user_service import (
     check_channel_membership,
     get_tenant_for_bot,
 )
+from bot.models.tenant import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +40,7 @@ async def _get_tenant(bot_username: str):
 
 async def _send_main_menu(message: Message, user, tenant):
     """
-    Envia ou edita a mensagem para exibir o menu principal.
-
-    Como o /start geralmente é uma nova mensagem, enviaremos uma nova.
-    Para callbacks, editaremos a mensagem existente (implementado depois).
+    Envia a tela principal do usuário.
     """
     # Texto padrão da home (futuramente virá do banco)
     text = (
@@ -61,13 +60,11 @@ async def _send_main_menu(message: Message, user, tenant):
     await message.answer(text, reply_markup=keyboard)
 
 
-async def _send_channel_required(message: Message, tenant):
+async def _send_channel_required(message: Message, tenant: Tenant):
     """
     Exibe mensagem pedindo para entrar no canal obrigatório.
-    O botão leva para o canal configurado.
     """
     # Canal configurado no settings_json do tenant (ou fallback global)
-    import json
     channel_link = None
     if tenant.settings_json:
         try:
@@ -104,8 +101,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     # Limpa qualquer estado anterior
     await state.clear()
 
-    # Obtém o tenant (por enquanto, primeiro ativo)
-    tenant = await _get_tenant(bot.username)
+    # Obtém o tenant usando o username configurado
+    tenant = await _get_tenant(settings.TELEGRAM_BOT_USERNAME)
     if tenant is None:
         logger.error("Nenhum tenant ativo encontrado.")
         await message.answer("⚠️ Sistema indisponível. Tente novamente mais tarde.")
@@ -145,16 +142,12 @@ async def back_to_main(callback: CallbackQuery, state: FSMContext):
     """
     Retorna para a tela principal a partir de qualquer callback "menu:back".
     """
-    # Edita a mensagem atual para o menu principal
     if callback.message:
         await callback.answer()
-        # Aqui reutilizaremos a lógica de montar menu, mas para simplificar,
-        # enviaremos uma nova mensagem (depois adaptaremos para edição)
-        # Como regra de uma única mensagem, devemos editar; mas por enquanto,
-        # faremos edição básica.
         user_telegram_id = callback.from_user.id
+
         async with get_async_session_factory() as session:
-            tenant = await get_tenant_for_bot(session, callback.bot.username)
+            tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
             if tenant:
                 user = await get_or_create_user(
                     session=session,
@@ -164,7 +157,7 @@ async def back_to_main(callback: CallbackQuery, state: FSMContext):
                     first_name=callback.from_user.first_name,
                     last_name=callback.from_user.last_name,
                 )
-                # Monta texto e teclado
+
                 text = (
                     f"🎬 Bem-vindo à <b>{settings.APP_NAME}</b>! ✨\n"
                     "A sua central de streamings com entrega 100% automática.\n"
