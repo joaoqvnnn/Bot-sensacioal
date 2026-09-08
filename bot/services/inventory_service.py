@@ -4,6 +4,9 @@ Serviço de controle de estoque.
 Gerencia os itens de estoque (InventoryItem) de um produto, aplicando
 estados AVAILABLE, RESERVED e SOLD com transações atômicas e locks,
 garantindo que duas pessoas não comprem o mesmo item.
+
+A configuração de tempo de reserva é lida da tabela Settings,
+permitindo alteração em tempo real pelo painel administrativo.
 """
 
 import logging
@@ -11,13 +14,28 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models.inventory_item import InventoryItem
 from bot.models.product import Product
+from bot.models.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_setting(session, tenant_id: UUID, key: str, default: str) -> str:
+    """Busca configuração do tenant, com fallback."""
+    if tenant_id is None:
+        return default
+    stmt = select(Settings).where(
+        Settings.tenant_id == tenant_id,
+        Settings.key == key,
+        Settings.deleted_at.is_(None),
+    )
+    result = await session.execute(stmt)
+    setting = result.scalar_one_or_none()
+    return setting.value if setting else default
 
 
 async def get_available_count(
@@ -27,14 +45,6 @@ async def get_available_count(
 ) -> int:
     """
     Retorna a quantidade de itens AVAILABLE de um produto.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        product_id: ID do produto.
-
-    Returns:
-        int: Quantidade disponível.
     """
     stmt = (
         select(InventoryItem)
@@ -55,28 +65,24 @@ async def reserve_items(
     product_id: UUID,
     user_id: UUID,
     quantity: int = 1,
-    reservation_minutes: int = 10,
+    reservation_minutes: Optional[int] = None,
 ) -> List[InventoryItem]:
     """
     Reserva uma quantidade de itens AVAILABLE para um usuário.
 
+    Se `reservation_minutes` for None, lê o valor de Settings
+    (chave "reservation_minutes") ou usa 10 como padrão.
+
     Usa lock (SELECT ... FOR UPDATE) para evitar corrida e overselling.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        product_id: ID do produto.
-        user_id: ID do usuário que está comprando.
-        quantity: Quantidade desejada.
-        reservation_minutes: Tempo de reserva em minutos.
-
-    Returns:
-        List[InventoryItem]: Itens reservados.
-
-    Raises:
-        ValueError: Se não houver estoque suficiente.
     """
-    # Seleciona itens disponíveis com lock
+    if reservation_minutes is None:
+        # Lê configuração do banco
+        value = await _get_setting(session, tenant_id, "reservation_minutes", "10")
+        try:
+            reservation_minutes = int(value)
+        except ValueError:
+            reservation_minutes = 10
+
     stmt = (
         select(InventoryItem)
         .where(
@@ -119,13 +125,6 @@ async def release_expired_reservations(
 ) -> int:
     """
     Libera reservas expiradas, retornando os itens para AVAILABLE.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-
-    Returns:
-        int: Quantidade de itens liberados.
     """
     now = datetime.now(timezone.utc)
     stmt = (
@@ -161,15 +160,6 @@ async def cancel_reservation(
 ) -> int:
     """
     Cancela a reserva de um usuário para um produto, liberando os itens.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        user_id: ID do usuário.
-        product_id: ID do produto.
-
-    Returns:
-        int: Quantidade de itens liberados.
     """
     stmt = (
         select(InventoryItem)
@@ -206,16 +196,6 @@ async def mark_items_as_sold(
 ) -> int:
     """
     Marca itens reservados como SOLD após a confirmação da compra.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        user_id: ID do usuário comprador.
-        product_id: ID do produto.
-        sold_item_ids: Lista de IDs dos itens a serem marcados como vendidos.
-
-    Returns:
-        int: Quantidade de itens marcados como SOLD.
     """
     if not sold_item_ids:
         return 0
@@ -258,16 +238,6 @@ async def add_stock_items(
 ) -> List[InventoryItem]:
     """
     Adiciona novos itens ao estoque de um produto.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        product_id: ID do produto.
-        items_data: Lista de dicionários com dados do item
-                    (email, password, note, reference, etc.)
-
-    Returns:
-        List[InventoryItem]: Itens criados.
     """
     created_items = []
     for data in items_data:
@@ -295,14 +265,6 @@ async def get_reserved_items_for_user(
 ) -> List[InventoryItem]:
     """
     Lista itens RESERVED de um usuário.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        user_id: ID do usuário.
-
-    Returns:
-        List[InventoryItem]: Itens reservados pelo usuário.
     """
     stmt = select(InventoryItem).where(
         InventoryItem.tenant_id == tenant_id,
