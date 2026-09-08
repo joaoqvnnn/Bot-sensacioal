@@ -1,8 +1,3 @@
-# ============================================
-# LARIZINHA STORE - BOT
-# Dockerfile multiestágio otimizado
-# ============================================
-
 FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -35,6 +30,11 @@ COPY --chown=botuser:botuser . .
 
 RUN mkdir -p /app/logs && chown -R botuser:botuser /app/logs
 
+# Copia o entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 USER botuser
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "bot"]
