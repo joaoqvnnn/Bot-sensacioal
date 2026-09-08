@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -20,8 +18,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    # Porta exposta apenas se explicitamente habilitada para debug local.
-    # Em produção, mantenha comentado ou use somente com firewall/VPN.
+    # Porta exposta apenas para debug local; em produção mantenha comentado.
     # ports:
     #   - "${POSTGRES_PORT:-5432}:5432"
 
@@ -29,17 +26,20 @@ services:
     image: redis:7-alpine
     container_name: larizinha_redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      - REDISCLI_AUTH=${REDIS_PASSWORD}
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
     networks:
       - larizinha_net
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
-    # Porta exposta apenas se explicitamente habilitada para debug local.
+    # Porta exposta apenas para debug local
     # ports:
     #   - "${REDIS_PORT:-6379}:6379"
 
@@ -49,6 +49,7 @@ services:
       dockerfile: Dockerfile
     container_name: larizinha_bot
     restart: unless-stopped
+    init: true
     env_file:
       - .env
     depends_on:
@@ -60,8 +61,6 @@ services:
       - larizinha_net
     volumes:
       - ./logs:/app/logs
-    # O bot não publica portas, consome a API do Telegram via polling.
-    # Webhooks futuros serão tratados por proxy reverso.
 
 volumes:
   postgres_data:
