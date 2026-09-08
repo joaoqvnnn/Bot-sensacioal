@@ -19,6 +19,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, func, desc
 
+from bot.core.config import settings
 from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button
@@ -35,8 +36,9 @@ router = Router()
 
 async def _get_tenant_and_user(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -182,7 +184,6 @@ def _get_rankings_keyboard(active_tab: str) -> InlineKeyboardMarkup:
         if callback.endswith(active_tab):
             label = label.replace("☑️", "✅")
         buttons.append(create_button(label, callback))
-    # Organiza em duas linhas de dois botões
     keyboard_rows = [buttons[:2], buttons[2:]]
     keyboard_rows.append([create_button("🔙 VOLTAR", "menu:back")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
@@ -202,7 +203,8 @@ async def show_services_ranking(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         ranking = await _get_ranking_services(session, tenant.id)
 
     text = _format_ranking(
@@ -222,7 +224,8 @@ async def show_recharges_ranking(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         ranking = await _get_ranking_recharges(session, tenant.id)
 
     text = _format_ranking(
@@ -242,7 +245,8 @@ async def show_purchases_ranking(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         ranking = await _get_ranking_purchases(session, tenant.id)
 
     text = _format_ranking(
@@ -262,7 +266,8 @@ async def show_balance_ranking(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         ranking = await _get_ranking_balance(session, tenant.id)
 
     text = _format_ranking(
