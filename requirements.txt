@@ -16,7 +16,7 @@ alembic==1.14.0
 redis==5.2.1
 
 # ---------- Configuração ----------
-pydantic==2.10.3
+pydantic==2.8.2          # <-- Ajustado para compatibilidade com aiogram 3.10.0
 pydantic-settings==2.6.1
 
 # ---------- Tarefas Assíncronas ----------
@@ -47,7 +47,4 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 
 # ---------- Envio de E-mail ----------
-aiosmtplib==3.0.2
-
-# ---------- Validação de initData do Telegram (opcional) ----------
-# python-telegram-bot pode ser usado, mas não é necessário se validarmos manualmente.
+aiosmtplib==3.0.2O
