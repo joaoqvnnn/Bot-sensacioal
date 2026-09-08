@@ -12,10 +12,10 @@ from typing import Optional
 from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from bot.models.base import FullAuditMixin
+from bot.models.base import Base, FullAuditMixin
 
 
-class Tenant(FullAuditMixin):
+class Tenant(Base, FullAuditMixin):
     """
     Entidade que representa um cliente/tenant do sistema.
     """
