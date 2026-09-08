@@ -35,7 +35,6 @@ async def health():
 @app.post("/webhook/mercadopago")
 async def mercado_pago_webhook(request: Request):
     """Recebe notificações do Mercado Pago e processa o pagamento."""
-    # Valida assinatura
     secret = settings.MERCADO_PAGO_WEBHOOK_SECRET.get_secret_value() if settings.MERCADO_PAGO_WEBHOOK_SECRET else None
 
     if secret:
@@ -102,12 +101,14 @@ async def mercado_pago_webhook(request: Request):
 
 async def start_bot():
     """Inicia o bot em polling."""
+    print("🚀 Iniciando bot...")
     setup_logging(
         level=settings.LOG_LEVEL,
         app_name=settings.APP_NAME,
         env=settings.APP_ENV,
     )
 
+    print("📡 Conectando ao Telegram...")
     redis_client = await create_redis_client(settings)
     storage = MemoryStorage()
 
@@ -119,15 +120,17 @@ async def start_bot():
 
     register_all_handlers(dp)
 
+    print("✅ Bot conectado e polling iniciado")
     await dp.start_polling(bot)
     await bot.session.close()
     await close_redis_client(redis_client)
 
 
 if __name__ == "__main__":
-    # Inicia o bot em uma thread separada
-    bot_thread = threading.Thread(target=lambda: asyncio.run(start_bot()), daemon=True)
+    def run_bot():
+        asyncio.run(start_bot())
+
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
 
-    # Inicia o servidor HTTP
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
