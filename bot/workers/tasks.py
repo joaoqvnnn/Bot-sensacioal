@@ -73,12 +73,13 @@ async def release_expired_reservations_task(ctx: Dict[str, Any], tenant_id: str)
 async def send_delivery_task(
     ctx: Dict[str, Any],
     delivery_job_id: str,
+    bot=None,
 ) -> bool:
     """
     Processa um job de entrega pendente.
     """
     from bot.workers.delivery_worker import send_delivery_task as _send
-    return await _send(ctx, delivery_job_id)
+    return await _send(ctx, delivery_job_id, bot)
 
 
 async def process_notifications_task(
