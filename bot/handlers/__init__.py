@@ -18,6 +18,7 @@ from bot.handlers.affiliate import router as affiliate_router
 from bot.handlers.profile import router as profile_router
 from bot.handlers.admin import router as admin_router
 from bot.handlers.admin_messages import router as admin_messages_router
+from bot.handlers.admin_stock import router as admin_stock_router
 from bot.handlers.rankings import router as rankings_router
 from bot.handlers.alerts import router as alerts_router
 from bot.handlers.inline import router as inline_router
@@ -46,6 +47,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
         profile_router,
         admin_router,
         admin_messages_router,
+        admin_stock_router,
         rankings_router,
         alerts_router,
         inline_router,
