@@ -1,7 +1,5 @@
 """
 Servidor HTTP para receber webhooks do Mercado Pago enquanto roda o bot.
-Inclui validação de assinatura HMAC, criação automática das tabelas no banco,
-e seed de tenant/admin para testes.
 """
 
 import asyncio
@@ -24,7 +22,6 @@ from bot.services.payment_service import process_payment_webhook
 from bot.core.logging import setup_logging
 from bot.core.redis import create_redis_client, close_redis_client
 
-# Importa todos os modelos para registrar na metadata
 import bot.models  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -39,7 +36,6 @@ async def health():
 
 @app.post("/webhook/mercadopago")
 async def mercado_pago_webhook(request: Request):
-    """Recebe notificações do Mercado Pago e processa o pagamento."""
     secret = settings.MERCADO_PAGO_WEBHOOK_SECRET.get_secret_value() if settings.MERCADO_PAGO_WEBHOOK_SECRET else None
 
     if secret:
@@ -48,12 +44,7 @@ async def mercado_pago_webhook(request: Request):
         if not request_id or not signature:
             raise HTTPException(status_code=400, detail="Headers ausentes")
 
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            request_id.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-
+        expected = hmac.new(secret.encode(), request_id.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, signature):
             raise HTTPException(status_code=403, detail="Assinatura inválida")
 
@@ -107,10 +98,13 @@ async def mercado_pago_webhook(request: Request):
 async def setup_database():
     """Cria as tabelas no banco e insere tenant/admin se necessário."""
     engine = get_async_engine()
+
+    # Drop table users para recriar com BIGINT
+    from sqlalchemy import text
     async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         await conn.run_sync(Base.metadata.create_all)
 
-    # Cria um tenant se não existir
     from sqlalchemy import select
     from bot.models.tenant import Tenant
     from bot.models.user import User
@@ -131,7 +125,6 @@ async def setup_database():
             session.add(tenant)
             await session.commit()
 
-        # Cria admin se não existir
         owner_id = settings.TELEGRAM_OWNER_ID
         if owner_id:
             user = (await session.execute(
@@ -154,13 +147,8 @@ async def setup_database():
 
 
 async def start_bot():
-    """Inicia o bot em polling."""
     print("🚀 Iniciando bot...")
-    setup_logging(
-        level=settings.LOG_LEVEL,
-        app_name=settings.APP_NAME,
-        env=settings.APP_ENV,
-    )
+    setup_logging(level=settings.LOG_LEVEL, app_name=settings.APP_NAME, env=settings.APP_ENV)
 
     print("🗄️ Configurando banco de dados...")
     await setup_database()
@@ -176,8 +164,6 @@ async def start_bot():
     dp = Dispatcher(storage=storage)
 
     register_all_handlers(dp)
-
-    # Apaga webhook ativo para permitir polling
     await bot.delete_webhook(drop_pending_updates=True)
 
     print("✅ Bot conectado e polling iniciado")
