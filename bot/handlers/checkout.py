@@ -20,6 +20,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
 
+from bot.core.config import settings
 from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button
@@ -41,8 +42,9 @@ class CheckoutStates(StatesGroup):
 
 async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -58,8 +60,9 @@ async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
 
 async def _get_tenant_and_user_from_message(message: Message):
     """Obtém tenant e usuário a partir de mensagem."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, message.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -99,7 +102,8 @@ async def buy_product(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         product = (await session.execute(
             select(Product).where(
                 Product.id == product_id,
@@ -152,11 +156,11 @@ async def process_quantity(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         balance_cents = await get_balance(session, tenant.id, user.id)
 
     if balance_cents < total_cents:
-        # Saldo insuficiente -> oferece Pix
         missing = total_cents - balance_cents
         text = (
             "❌ Saldo insuficiente!\n"
@@ -166,7 +170,7 @@ async def process_quantity(message: Message, state: FSMContext):
             "Deseja gerar um Pix para completar a compra?"
         )
         buttons = [
-            [create_button(f"💠 GERAR PIX {cents_to_brl(missing)}", f"recharge:pix")],  # leva para recarga
+            [create_button(f"💠 GERAR PIX {cents_to_brl(missing)}", f"recharge:pix")],
             [create_button("❌ CANCELAR", f"catalog:product:{product_id}")],
         ]
         await state.clear()
@@ -208,7 +212,8 @@ async def process_delivery_method(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         product = (await session.execute(
             select(Product).where(Product.id == product_id, Product.tenant_id == tenant.id)
         )).scalar_one_or_none()
