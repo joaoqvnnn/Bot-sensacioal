@@ -9,7 +9,6 @@ para incluir os routers no Dispatcher.
 import logging
 from aiogram import Dispatcher
 
-# Handlers de usuário
 from bot.handlers.start import router as start_router
 from bot.handlers.catalog import router as catalog_router
 from bot.handlers.checkout import router as checkout_router
@@ -23,7 +22,6 @@ from bot.handlers.inline import router as inline_router
 from bot.handlers.terms import router as terms_router
 from bot.handlers.support import router as support_router
 
-# Handlers administrativos (painel completo)
 from bot.handlers.admin import router as admin_router
 from bot.handlers.admin_general import router as admin_general_router
 from bot.handlers.admin_editor_textos import router as admin_editor_textos_router
@@ -53,21 +51,12 @@ from bot.handlers.admin_mini_app import router as admin_mini_app_router
 from bot.handlers.admin_multitenant import router as admin_multitenant_router
 from bot.handlers.admin_updates import router as admin_updates_router
 from bot.handlers.admin_integrity import router as admin_integrity_router
+from bot.handlers.admin_logs import router as admin_logs_router
+from bot.handlers.admin_platform_security import router as admin_platform_security_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
-    """
-    Registra todos os routers de handlers no Dispatcher.
-
-    Args:
-        dp: Instância do Dispatcher do aiogram.
-
-    Raises:
-        ValueError: Se houver conflito de handlers (por exemplo, comandos duplicados).
-    """
-    # Lista de routers a registrar
     routers = [
-        # Usuário
         start_router,
         catalog_router,
         checkout_router,
@@ -81,7 +70,6 @@ def register_all_handlers(dp: Dispatcher) -> None:
         terms_router,
         support_router,
 
-        # Admin
         admin_router,
         admin_general_router,
         admin_editor_textos_router,
@@ -111,6 +99,8 @@ def register_all_handlers(dp: Dispatcher) -> None:
         admin_multitenant_router,
         admin_updates_router,
         admin_integrity_router,
+        admin_logs_router,
+        admin_platform_security_router,
     ]
 
     for router in routers:
