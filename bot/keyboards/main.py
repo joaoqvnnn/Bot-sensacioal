@@ -2,44 +2,87 @@
 Teclado principal da home do bot.
 
 Contém os botões de navegação inicial exibidos após a verificação de canal.
-Futuramente esses botões serão carregados do banco de dados (tabela keyboard_layouts),
-mas por enquanto mantemos uma versão estática alinhada à especificação.
+Inclui botão para abrir o Mini App (WebApp) e os demais atalhos.
 """
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from bot.keyboards.utils import create_button, create_inline_keyboard
+from bot.core.config import settings
 
 
 def get_main_keyboard() -> InlineKeyboardMarkup:
     """
     Retorna o teclado inline principal da home.
 
-    Botões (ordem e layout conforme especificação):
-    - 🛍 COMPRAR PRODUTOS
-    - 🏪 ABRIR LOJA
-    - 👤 MEU PERFIL
-    - 💰 RECARREGAR SALDO
-    - 💎 AFILIADOS
-    - 🏆 TOP COMPRADORES
-    - 🎧 ATENDIMENTO
-    - ℹ️ SOBRE O BOT
-    - 🔎 PESQUISAR SERVIÇOS
-
-    Returns:
-        InlineKeyboardMarkup: Teclado da home.
+    Botões:
+    - 🛍 Comprar Produtos
+    - 🏪 Abrir Loja (Mini App)
+    - 👤 Meu Perfil
+    - 💰 Recarregar Saldo
+    - 💎 Afiliados
+    - 🏆 Top Compradores
+    - 🎧 Atendimento
+    - ℹ️ Sobre o Bot
+    - 🔎 Pesquisar Serviços
     """
-    buttons = [
-        ("🛍 COMPRAR PRODUTOS", "menu:catalog"),
-        ("🏪 ABRIR LOJA", "menu:store"),
-        ("👤 MEU PERFIL", "menu:profile"),
-        ("💰 RECARREGAR SALDO", "menu:recharge"),
-        ("💎 AFILIADOS", "menu:affiliates"),
-        ("🏆 TOP COMPRADORES", "menu:rankings"),
-        ("🎧 ATENDIMENTO", "menu:support"),
-        ("ℹ️ SOBRE O BOT", "menu:about"),
-        ("🔎 PESQUISAR SERVIÇOS", "menu:search"),
-    ]
+    # URL do Mini App: usa MINI_APP_URL se configurada, senão fallback para o Render
+    mini_app_url = str(settings.MINI_APP_URL) if settings.MINI_APP_URL else "https://bot-sensacioal.onrender.com/miniapp"
 
-    # Organiza em linhas de 2 botões (pode ser alterado quando vier do banco)
-    return create_inline_keyboard(buttons, row_width=2)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛍 COMPRAR PRODUTOS",
+                    callback_data="menu:catalog",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏪 ABRIR LOJA",
+                    web_app=WebAppInfo(url=mini_app_url),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👤 MEU PERFIL",
+                    callback_data="menu:profile",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💰 RECARREGAR SALDO",
+                    callback_data="menu:recharge",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💎 AFILIADOS",
+                    callback_data="menu:affiliates",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏆 TOP COMPRADORES",
+                    callback_data="menu:rankings",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎧 ATENDIMENTO",
+                    callback_data="menu:support",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="ℹ️ SOBRE O BOT",
+                    callback_data="menu:about",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔎 PESQUISAR SERVIÇOS",
+                    switch_inline_query_current_chat="",
+                )
+            ],
+        ]
+    )
