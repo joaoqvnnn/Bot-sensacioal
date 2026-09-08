@@ -16,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import func, select
 
+from bot.core.config import settings
 from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button, create_pagination_buttons
@@ -39,8 +40,9 @@ class ProfileStates(StatesGroup):
 
 async def _get_tenant_and_user(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -56,8 +58,9 @@ async def _get_tenant_and_user(callback: CallbackQuery):
 
 async def _get_tenant_and_user_from_message(message: Message):
     """Obtém tenant e usuário a partir de mensagem (para FSM)."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, message.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -82,7 +85,6 @@ async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKe
 
 async def _get_user_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     """Retorna estatísticas reais do usuário."""
-    # Compras realizadas (pedidos completos)
     purchases_stmt = select(func.count(Order.id)).where(
         Order.tenant_id == tenant_id,
         Order.user_id == user_id,
@@ -91,7 +93,6 @@ async def _get_user_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     )
     purchases_count = (await session.execute(purchases_stmt)).scalar_one()
 
-    # Total gasto
     spent_stmt = select(func.sum(Order.total_cents)).where(
         Order.tenant_id == tenant_id,
         Order.user_id == user_id,
@@ -100,7 +101,6 @@ async def _get_user_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     )
     total_spent = (await session.execute(spent_stmt)).scalar_one() or 0
 
-    # Pix inseridos (créditos de deposit)
     deposits_stmt = select(func.sum(WalletLedger.amount_cents)).where(
         WalletLedger.tenant_id == tenant_id,
         WalletLedger.user_id == user_id,
@@ -109,7 +109,6 @@ async def _get_user_stats(session, tenant_id: UUID, user_id: UUID) -> dict:
     )
     total_deposits = (await session.execute(deposits_stmt)).scalar_one() or 0
 
-    # Gifts resgatados (entry_type gift)
     gifts_stmt = select(func.sum(WalletLedger.amount_cents)).where(
         WalletLedger.tenant_id == tenant_id,
         WalletLedger.user_id == user_id,
@@ -134,7 +133,8 @@ async def show_profile(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         balance_cents = await get_balance(session, tenant.id, user.id)
         stats = await _get_user_stats(session, tenant.id, user.id)
 
@@ -172,7 +172,8 @@ async def show_history(callback: CallbackQuery, state: FSMContext, page: int = 1
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         stmt = (
             select(Order)
             .where(
@@ -275,7 +276,8 @@ async def process_whatsapp(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         user = await get_or_create_user(
             session=session,
             tenant=tenant,
@@ -329,7 +331,8 @@ async def process_gift_code(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         user = await get_or_create_user(
             session=session,
             tenant=tenant,
