@@ -6,6 +6,7 @@ Painel inicial do administrador/dono, com:
 - Gerenciamento de admins (adicionar, remover, listar)
 - Configurações de afiliados (percentual, pontos, mínimo)
 - Configurações de Pix (mínimo, máximo, bônus, expiração)
+- Edição de mensagens e mídias (templates, imagens)
 
 Tudo editando a mesma mensagem, com botões de voltar.
 """
@@ -26,11 +27,11 @@ from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button
 from bot.models.admin_user import AdminUser
-from bot.models.affiliate import AffiliatePoints  # se necessário
+from bot.models.affiliate import AffiliatePoints
 from bot.models.order import Order
 from bot.models.user import User
 from bot.models.tenant import Tenant
-from bot.models.settings import Settings  # modelo Settings
+from bot.models.settings import Settings
 from bot.services.user_service import get_tenant_for_bot, get_or_create_user
 
 logger = logging.getLogger(__name__)
@@ -67,13 +68,11 @@ async def _get_tenant_and_user(callback: CallbackQuery):
 
 async def _is_admin(session, tenant_id: UUID, user_id: UUID) -> bool:
     """Verifica se o usuário é administrador ou dono no tenant."""
-    # Verifica se é owner
     user_stmt = select(User).where(User.id == user_id, User.tenant_id == tenant_id)
     user = (await session.execute(user_stmt)).scalar_one_or_none()
     if user and (user.is_owner or user.is_admin):
         return True
 
-    # Verifica tabela admin_users
     admin_stmt = select(AdminUser).where(
         AdminUser.tenant_id == tenant_id,
         AdminUser.user_id == user_id,
@@ -133,7 +132,6 @@ async def show_admin_main(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Acesso negado.", show_alert=True)
             return
 
-        # Coleta métricas reais
         total_users = (await session.execute(
             select(func.count(User.id)).where(
                 User.tenant_id == tenant.id,
@@ -174,6 +172,7 @@ async def show_admin_main(callback: CallbackQuery, state: FSMContext):
         [create_button("💳 CONFIGURAR PIX", "admin:pix_settings")],
         [create_button("👥 CONFIGURAR USUÁRIOS", "admin:manage_users")],
         [create_button("📦 CONFIGURAR LOGINS", "admin:manage_stock")],
+        [create_button("✏️ MENSAGENS/MÍDIAS", "admin:messages")],
         [create_button("🔙 VOLTAR", "menu:back")],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -193,7 +192,6 @@ async def manage_admins(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Acesso negado.", show_alert=True)
             return
 
-        # Conta admins ativos
         admin_count = (await session.execute(
             select(func.count(AdminUser.id)).where(
                 AdminUser.tenant_id == tenant.id,
@@ -231,7 +229,6 @@ async def add_admin(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminStates.WAITING_ADMIN_ID)
 async def process_add_admin(message: Message, state: FSMContext):
     """Processa adição de admin por ID ou username."""
-    from bot.services.user_service import get_tenant_for_bot, get_or_create_user
     input_value = message.text.strip() if message.text else ""
     async with get_async_session_factory() as session:
         tenant = await get_tenant_for_bot(session, message.bot.username)
@@ -240,7 +237,6 @@ async def process_add_admin(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Se input for numérico, busca por telegram_id, senão username
         target_user = None
         if input_value.isdigit():
             stmt = select(User).where(
@@ -263,7 +259,6 @@ async def process_add_admin(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Verifica se já é admin
         existing_admin = (await session.execute(
             select(AdminUser).where(
                 AdminUser.tenant_id == tenant.id,
@@ -276,7 +271,6 @@ async def process_add_admin(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Adiciona como admin
         new_admin = AdminUser(
             tenant_id=tenant.id,
             user_id=target_user.id,
@@ -343,7 +337,6 @@ async def affiliate_settings(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Acesso negado.", show_alert=True)
             return
 
-        # Busca valores atuais (se existirem) ou padrões
         commission_percent = await _get_setting(session, tenant.id, "affiliate_percent") or "20"
         min_points = await _get_setting(session, tenant.id, "affiliate_min_points") or "500"
         multiplier = await _get_setting(session, tenant.id, "affiliate_multiplier") or "0.01"
@@ -459,5 +452,69 @@ async def process_pix_min(message: Message, state: FSMContext):
         if tenant:
             await _set_setting(session, tenant.id, "pix_min_deposit", f"{min_cents/100:.2f}")
             await message.answer(f"✅ Depósito mínimo atualizado para R$ {min_cents/100:.2f}.")
+
+    await state.clear()
+
+
+@router.callback_query(F.data == "admin:change_pix_max")
+async def change_pix_max(callback: CallbackQuery, state: FSMContext):
+    """Pede novo depósito máximo."""
+    await state.set_state(AdminStates.WAITING_PIX_MAX)
+    text = "Digite o novo depósito máximo (ex: 150.00):"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[create_button("🔙 CANCELAR", "admin:pix_settings")]]
+    )
+    await _edit_or_answer(callback, text, keyboard)
+
+
+@router.message(AdminStates.WAITING_PIX_MAX)
+async def process_pix_max(message: Message, state: FSMContext):
+    """Salva novo máximo."""
+    value = message.text.strip() if message.text else ""
+    try:
+        max_cents = int(float(value.replace(",", ".")) * 100)
+        if max_cents <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Valor inválido. Use formato como 1.00 ou 10,50.")
+        return
+
+    async with get_async_session_factory() as session:
+        tenant = await get_tenant_for_bot(session, message.bot.username)
+        if tenant:
+            await _set_setting(session, tenant.id, "pix_max_deposit", f"{max_cents/100:.2f}")
+            await message.answer(f"✅ Depósito máximo atualizado para R$ {max_cents/100:.2f}.")
+
+    await state.clear()
+
+
+@router.callback_query(F.data == "admin:change_pix_bonus")
+async def change_pix_bonus(callback: CallbackQuery, state: FSMContext):
+    """Pede novo percentual de bônus."""
+    await state.set_state(AdminStates.WAITING_PIX_BONUS)
+    text = "Digite o novo percentual de bônus (ex: 10 para 10%):"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[create_button("🔙 CANCELAR", "admin:pix_settings")]]
+    )
+    await _edit_or_answer(callback, text, keyboard)
+
+
+@router.message(AdminStates.WAITING_PIX_BONUS)
+async def process_pix_bonus(message: Message, state: FSMContext):
+    """Salva novo bônus."""
+    value = message.text.strip() if message.text else ""
+    try:
+        bonus = int(value)
+        if bonus < 0 or bonus > 100:
+            raise ValueError
+    except ValueError:
+        await message.answer("Valor inválido. Digite um número entre 0 e 100.")
+        return
+
+    async with get_async_session_factory() as session:
+        tenant = await get_tenant_for_bot(session, message.bot.username)
+        if tenant:
+            await _set_setting(session, tenant.id, "pix_bonus_percent", str(bonus))
+            await message.answer(f"✅ Bônus atualizado para {bonus}%.")
 
     await state.clear()
