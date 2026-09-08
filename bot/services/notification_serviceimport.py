@@ -2,10 +2,11 @@
 Serviço de notificações programadas.
 
 Fornece funções para agendar notificações e processar as que estão
-pendentes (vencidas). Usa a tabela ScheduledNotification.
+pendentes (vencidas). Usa a tabela ScheduledNotification e registra
+execuções em AuditLog para histórico.
 """
 
-import logging
+ logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from uuid import UUID
@@ -14,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models.scheduled_notification import ScheduledNotification
+from bot.models.audit_log import AuditLog
 from bot.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -108,6 +110,17 @@ async def process_due_notifications(
             await _send_to_all_users(session, tenant_id, bot, notif)
         else:
             logger.warning(f"Bot não fornecido; notificação {notif.id} não enviada.")
+
+        # Registra a execução no AuditLog
+        audit = AuditLog(
+            tenant_id=tenant_id,
+            action="scheduled_notification.run",
+            description=f"Execução da notificação '{notif.title}'",
+            actor_user_id=None,
+            target_user_id=None,
+            metadata_json={"notification_id": str(notif.id)},
+        )
+        session.add(audit)
 
         # Se repetir, reagenda
         if notif.repeat_interval_minutes:
