@@ -196,7 +196,6 @@ async def show_admin_main_message(message: Message, tenant, user):
     for title, callback_data in ADMIN_SECTIONS[start:end]:
         buttons.append([create_button(title, callback_data)])
 
-    # Botões de navegação
     nav_buttons = []
     if page < (total_sections + per_page - 1) // per_page:
         nav_buttons.append(create_button("Próxima ➡️", "admin:page:2"))
