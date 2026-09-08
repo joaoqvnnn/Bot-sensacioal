@@ -13,6 +13,7 @@ from bot.handlers.start import router as start_router
 from bot.handlers.catalog import router as catalog_router
 from bot.handlers.recharge import router as recharge_router
 from bot.handlers.payment import router as payment_router
+from bot.handlers.affiliate import router as affiliate_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -31,8 +32,9 @@ def register_all_handlers(dp: Dispatcher) -> None:
         catalog_router,
         recharge_router,
         payment_router,
+        affiliate_router,
         # Futuros routers serão adicionados aqui:
-        # profile_router,
+        # profile_router,  # já existe profile_router? Ainda não criamos o arquivo profile.py; o código que forneci anteriormente tinha erro e não foi finalizado.
         # admin_router,
     ]
 
