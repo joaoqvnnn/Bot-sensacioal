@@ -1,17 +1,17 @@
 """
-Serviço de compra.
+Serviço de compra (atualizado).
 
 Orquestra o fluxo completo de compra de um produto:
 - Verifica disponibilidade de estoque
 - Calcula valor total
 - Se saldo suficiente: debita, cria pedido, marca estoque como SOLD
 - Se saldo insuficiente: retorna diferença para gerar Pix (sem concluir)
-- Após concluir, gera entrega (DeliveryJob) e token de acesso (ProductAccessToken)
+- Após concluir, gera entrega (DeliveryJob), token de acesso e notifica canal.
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -30,6 +30,7 @@ from bot.services.wallet_service import (
     debit_wallet,
 )
 from bot.services.delivery_service import create_delivery_for_order
+from bot.services.channel_notifier import notify_purchase_completed
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ async def purchase_product(
     product: Product,
     quantity: int = 1,
     delivery_method: str = "TELEGRAM",
+    bot=None,  # instância do Bot para notificações
 ) -> dict:
     """
     Executa a compra de um produto para um usuário.
@@ -53,10 +55,10 @@ async def purchase_product(
        - Marca itens como SOLD
        - Cria pedido e itens
        - Gera entrega (DeliveryJob e ProductAccessToken)
+       - Notifica canal de compras (se configurado)
        - Retorna status "COMPLETED"
     4. Se saldo insuficiente:
        - Retorna "INSUFFICIENT_FUNDS" com valor faltante
-         (não reserva estoque; reserva somente quando pagamento for feito)
 
     Args:
         session: Sessão do banco.
@@ -65,6 +67,7 @@ async def purchase_product(
         product: Instância do produto.
         quantity: Quantidade desejada.
         delivery_method: Método de entrega preferido (TELEGRAM, WHATSAPP, EMAIL).
+        bot: Instância do Bot (opcional, para envio de notificações).
 
     Returns:
         dict: Resultado da operação com status e dados.
@@ -95,18 +98,15 @@ async def purchase_product(
             product_id=product.id,
             user_id=user.id,
             quantity=quantity,
-            reservation_minutes=10,  # deve ser configurável
+            reservation_minutes=10,
         )
     except ValueError as e:
         logger.warning(f"Falha ao reservar estoque: {e}")
-        return {
-            "status": "OUT_OF_STOCK",
-            "message": str(e),
-        }
+        return {"status": "OUT_OF_STOCK", "message": str(e)}
 
     # Debita saldo
     try:
-        ledger_entry = await debit_wallet(
+        await debit_wallet(
             session,
             tenant_id=tenant_id,
             user_id=user.id,
@@ -116,7 +116,6 @@ async def purchase_product(
             reference_id=None,
         )
     except Exception as e:
-        # Se falhar débito, libera reserva
         await cancel_reservation(
             session,
             tenant_id=tenant_id,
@@ -135,14 +134,12 @@ async def purchase_product(
         sold_item_ids=[item.id for item in reserved_items],
     )
     if sold_count != quantity:
-        # Inconsistência: reverter débito e cancelar reserva
         logger.error(f"Inconsistência: esperado {quantity} vendidos, mas {sold_count} marcados.")
-        # Estorna débito
         await debit_wallet(
             session,
             tenant_id=tenant_id,
             user_id=user.id,
-            amount_cents=-total_cents,  # estorno
+            amount_cents=-total_cents,
             entry_type="reversal",
             description=f"Estorno por inconsistência na compra de {product.name}",
         )
@@ -164,7 +161,7 @@ async def purchase_product(
         completed_at=datetime.now(timezone.utc),
     )
     session.add(order)
-    await session.flush()  # para obter ID
+    await session.flush()
 
     # Cria itens do pedido
     for item in reserved_items:
@@ -180,13 +177,12 @@ async def purchase_product(
         )
         session.add(order_item)
 
-    # Commit principal da compra (pedido e itens)
     await session.commit()
     await session.refresh(order)
 
     logger.info(f"Compra concluída: order_id={order.id}, user_id={user.id}, total={total_cents}")
 
-    # Gera entrega e token de acesso (após commit da compra, mas dentro da mesma sessão)
+    # Gera entrega e token de acesso
     delivery_info = None
     try:
         delivery_info = await create_delivery_for_order(
@@ -198,8 +194,13 @@ async def purchase_product(
         )
     except Exception as e:
         logger.exception(f"Erro ao gerar entrega para order_id={order.id}: {e}")
-        # A compra já está concluída; o erro não reverte a compra.
-        # Em produção, pode-se agendar retry.
+
+    # Notifica canal de compras (se bot fornecido)
+    if bot:
+        try:
+            await notify_purchase_completed(tenant_id, order, bot)
+        except Exception as e:
+            logger.exception(f"Erro ao notificar canal para order_id={order.id}: {e}")
 
     return {
         "status": "COMPLETED",
