@@ -15,6 +15,9 @@ from bot.models.base import (
 from bot.models.tenant import Tenant
 from bot.models.user import User
 from bot.models.wallet import Wallet, WalletLedger
+from bot.models.category import Category
+from bot.models.product import Product
+from bot.models.inventory_item import InventoryItem
 
 __all__ = [
     "Base",
@@ -26,4 +29,7 @@ __all__ = [
     "User",
     "Wallet",
     "WalletLedger",
+    "Category",
+    "Product",
+    "InventoryItem",
 ]
