@@ -33,7 +33,8 @@ router = Router()
 
 async def _get_tenant(bot_username: str):
     """Obtém o tenant associado ao bot."""
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         tenant = await get_tenant_for_bot(session, bot_username)
         return tenant
 
@@ -42,7 +43,6 @@ async def _send_main_menu(message: Message, user, tenant):
     """
     Envia a tela principal do usuário.
     """
-    # Texto padrão da home (futuramente virá do banco)
     text = (
         f"🎬 Bem-vindo à <b>{settings.APP_NAME}</b>! ✨\n"
         "A sua central de streamings com entrega 100% automática.\n"
@@ -64,7 +64,6 @@ async def _send_channel_required(message: Message, tenant: Tenant):
     """
     Exibe mensagem pedindo para entrar no canal obrigatório.
     """
-    # Canal configurado no settings_json do tenant (ou fallback global)
     channel_link = None
     if tenant.settings_json:
         try:
@@ -98,18 +97,16 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     """
     Manipula o comando /start.
     """
-    # Limpa qualquer estado anterior
     await state.clear()
 
-    # Obtém o tenant usando o username configurado
     tenant = await _get_tenant(settings.TELEGRAM_BOT_USERNAME)
     if tenant is None:
         logger.error("Nenhum tenant ativo encontrado.")
         await message.answer("⚠️ Sistema indisponível. Tente novamente mais tarde.")
         return
 
-    # Obtém ou cria usuário
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         user = await get_or_create_user(
             session=session,
             tenant=tenant,
@@ -119,12 +116,10 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             last_name=message.from_user.last_name,
         )
 
-        # Verifica bloqueio
         if user.is_blocked:
             await message.answer("🚫 Você está bloqueado. Contate o suporte.")
             return
 
-        # Verifica assinatura do canal
         is_member = await check_channel_membership(
             bot=bot,
             tenant=tenant,
@@ -146,7 +141,8 @@ async def back_to_main(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         user_telegram_id = callback.from_user.id
 
-        async with get_async_session_factory() as session:
+        factory = get_async_session_factory()
+        async with factory() as session:
             tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
             if tenant:
                 user = await get_or_create_user(
