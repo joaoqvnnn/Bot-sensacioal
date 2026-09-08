@@ -2,17 +2,15 @@
 Configuração de tarefas assíncronas (arq).
 
 Define as funções de tarefas que serão executadas pelos workers:
-- process_payment_webhook: processa confirmação de pagamento vinda do webhook
-- release_expired_reservations: libera reservas de estoque expiradas
-- send_delivery: envia entrega ao usuário (Telegram, WhatsApp, e-mail)
-- send_broadcast: envia transmissão em massa
-- process_withdrawal: processa saque solicitado
+- process_payment_task: processa confirmação de pagamento vinda do webhook
+- release_expired_reservations_task: libera reservas de estoque expiradas
+- send_delivery_task: processa entregas pendentes (Telegram, WhatsApp, e-mail)
+- (futuro) send_broadcast_task, process_withdrawal_task
 
 Todas as tarefas usam sessão do banco e serviços existentes.
 """
 
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -24,6 +22,7 @@ from bot.core.database import get_async_session_factory
 from bot.core.redis import create_redis_client
 from bot.services.payment_service import process_payment_webhook
 from bot.services.inventory_service import release_expired_reservations
+from bot.workers.delivery_worker import send_delivery_task
 
 logger = logging.getLogger(__name__)
 
@@ -80,27 +79,34 @@ async def release_expired_reservations_task(ctx: Dict[str, Any], tenant_id: str)
             return 0
 
 
+async def send_delivery_task(
+    ctx: Dict[str, Any],
+    delivery_job_id: str,
+) -> bool:
+    """
+    Processa um job de entrega pendente (tarefa em worker).
+
+    Args:
+        ctx: Contexto do arq.
+        delivery_job_id: ID do DeliveryJob (string).
+
+    Returns:
+        bool: True se entrega concluída, False caso contrário.
+    """
+    async with get_async_session_factory() as session:
+        # A função real está em delivery_worker.py; aqui apenas chamamos.
+        from bot.workers.delivery_worker import send_delivery_task as _send
+        return await _send(ctx, delivery_job_id)
+
+
 async def startup(ctx: Dict[str, Any]) -> None:
     """Inicializa conexões no worker."""
-    # Redis já é injetado pelo arq automaticamente.
     pass
 
 
 async def shutdown(ctx: Dict[str, Any]) -> None:
     """Encerra conexões."""
     pass
-
-
-# Configuração do pool de workers (usada em bot/workers/__init__.py)
-async def get_worker_pool():
-    """Cria e retorna um pool de workers arq."""
-    redis_settings = RedisSettings(
-        host=settings.REDIS_HOST,
-        port=settings.REDIS_PORT,
-        password=settings.REDIS_PASSWORD.get_secret_value(),
-        database=settings.REDIS_DB,
-    )
-    return await create_pool(redis_settings)
 
 
 class WorkerSettings:
@@ -110,8 +116,8 @@ class WorkerSettings:
     functions = [
         process_payment_task,
         release_expired_reservations_task,
-        # Adicionar outras tarefas conforme implementação:
-        # send_delivery_task,
+        send_delivery_task,
+        # Futuras tarefas:
         # send_broadcast_task,
         # process_withdrawal_task,
     ]
