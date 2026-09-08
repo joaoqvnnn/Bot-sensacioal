@@ -1,70 +1,60 @@
 """
-Modelo de Usuário.
+Modelo de Tenant (cliente multi-tenant).
 
-Representa qualquer pessoa que interage com o bot, seja cliente final,
-administrador ou dono. Está sempre associado a um tenant (multi-tenancy).
+Cada tenant representa um cliente que aluga/usa uma instância do bot,
+com seus próprios usuários, produtos, estoque, pagamentos, etc.
 """
 
 import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bot.models.base import FullAuditMixin
 
 
-class User(FullAuditMixin):
+class Tenant(FullAuditMixin):
     """
-    Entidade de usuário do sistema.
+    Entidade que representa um cliente/tenant do sistema.
     """
 
-    __tablename__ = "users"
+    __tablename__ = "tenants"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "telegram_id", name="uq_users_tenant_telegram"),
-        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        UniqueConstraint("slug", name="uq_tenants_slug"),
     )
 
-    # Relacionamento com Tenant
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    tenant = relationship("Tenant", back_populates="users")
+    # Identificação
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    slug: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Identificação no Telegram
-    telegram_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Status e plano
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    plan: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    vip: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Dados de contato
-    whatsapp: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    # Configurações específicas do tenant
+    settings_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Status e papéis
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_owner: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    block_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Segurança
-    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # para saque/ativação
-    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    whatsapp_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-    # Datas relevantes
-    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-    # Relacionamentos (serão definidos conforme models forem criados)
-    # wallet = relationship("Wallet", back_populates="user", uselist=False)
-    # orders = relationship("Order", back_populates="user")
+    # Relacionamentos
+    users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
+    wallets = relationship("Wallet", back_populates="tenant", cascade="all, delete-orphan")
+    wallet_ledger_entries = relationship("WalletLedger", back_populates="tenant", cascade="all, delete-orphan")
+    # products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
     # etc.
 
+    def is_expired(self) -> bool:
+        """Retorna True se o tenant estiver vencido."""
+        if self.expires_at is None:
+            return False
+        return self.expires_at < datetime.now(self.expires_at.tzinfo)
+
+    def is_available(self) -> bool:
+        """Retorna True se o tenant estiver ativo e não vencido."""
+        return self.is_active and not self.is_expired()
+
     def __repr__(self) -> str:
-        return f"<User(tenant_id={self.tenant_id}, telegram_id={self.telegram_id}, username='{self.username}')>"
+        return f"<Tenant(id={self.id}, name='{self.name}', slug='{self.slug}')>"
