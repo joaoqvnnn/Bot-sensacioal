@@ -1,0 +1,53 @@
+# ============================================
+# LARIZINHA STORE - DEPENDÊNCIAS PYTHON
+# ============================================
+# Use pip install -r requirements.txt
+# Compatível com Python 3.12+
+
+# ---------- Telegram Bot Framework ----------
+aiogram==3.10.0
+
+# ---------- Banco de Dados e ORM ----------
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# ---------- Cache / Fila / Lock ----------
+redis==5.2.1
+
+# ---------- Configuração ----------
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# ---------- Tarefas Assíncronas ----------
+arq==0.26.1
+
+# ---------- HTTP / API ----------
+httpx==0.28.1
+
+# ---------- Logging e Monitoramento ----------
+structlog==24.4.0
+
+# ---------- Segurança / Criptografia ----------
+cryptography==44.0.0
+passlib[bcrypt]==1.7.4
+
+# ---------- Utilitários ----------
+python-dateutil==2.9.0.post0
+orjson==3.10.12
+
+# ---------- Geração de PDF / Relatórios ----------
+reportlab==4.2.5
+
+# ---------- Variáveis de Ambiente ----------
+python-dotenv==1.0.1
+
+# ---------- Web App / API ----------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# ---------- Envio de E-mail ----------
+aiosmtplib==3.0.2
+
+# ---------- Validação de initData do Telegram (opcional) ----------
+# python-telegram-bot pode ser usado, mas não é necessário se validarmos manualmente.
