@@ -1,12 +1,13 @@
 """
 Servidor HTTP para receber webhooks do Mercado Pago enquanto roda o bot.
-Inclui validação de assinatura HMAC para segurança.
+Inclui validação de assinatura HMAC e inicia o bot em thread separada.
 """
 
 import asyncio
 import hashlib
 import hmac
 import logging
+import threading
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -56,15 +57,13 @@ async def mercado_pago_webhook(request: Request):
     action = payload.get("action", "")
     data = payload.get("data", {})
 
-    # O Mercado Pago envia payment_id no campo data.id
     payment_id = data.get("id")
     if not payment_id:
         return {"status": "ignored"}
 
-    # Mapeia ação para status interno
     status_map = {
         "payment.created": "pending",
-        "payment.updated": "approved",  # simplificado; ideal consultar API
+        "payment.updated": "approved",
         "payment.approved": "approved",
         "payment.failed": "failed",
         "payment.rejected": "failed",
@@ -77,7 +76,6 @@ async def mercado_pago_webhook(request: Request):
     from bot.models.payment import Payment
 
     async with get_async_session_factory() as session:
-        # Busca pagamento pelo external_payment_id
         payment = (await session.execute(
             select(Payment).where(Payment.external_payment_id == str(payment_id))
         )).scalar_one_or_none()
@@ -127,9 +125,9 @@ async def start_bot():
 
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Inicia o bot em uma thread separada
+    bot_thread = threading.Thread(target=lambda: asyncio.run(start_bot()), daemon=True)
+    bot_thread.start()
 
-    loop.create_task(start_bot())
-
+    # Inicia o servidor HTTP
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
