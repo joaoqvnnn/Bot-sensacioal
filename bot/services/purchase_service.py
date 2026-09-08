@@ -6,13 +6,15 @@ Orquestra o fluxo completo de compra de um produto:
 - Calcula valor total
 - Se saldo suficiente: debita, cria pedido, marca estoque como SOLD
 - Se saldo insuficiente: retorna diferença para gerar Pix (sem concluir)
+- Após concluir, gera entrega (DeliveryJob) e token de acesso (ProductAccessToken)
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models.order import Order, OrderItem
@@ -27,6 +29,7 @@ from bot.services.wallet_service import (
     get_balance,
     debit_wallet,
 )
+from bot.services.delivery_service import create_delivery_for_order
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +40,7 @@ async def purchase_product(
     user: User,
     product: Product,
     quantity: int = 1,
+    delivery_method: str = "TELEGRAM",
 ) -> dict:
     """
     Executa a compra de um produto para um usuário.
@@ -48,6 +52,7 @@ async def purchase_product(
        - Debita saldo
        - Marca itens como SOLD
        - Cria pedido e itens
+       - Gera entrega (DeliveryJob e ProductAccessToken)
        - Retorna status "COMPLETED"
     4. Se saldo insuficiente:
        - Retorna "INSUFFICIENT_FUNDS" com valor faltante
@@ -59,6 +64,7 @@ async def purchase_product(
         user: Instância do usuário comprador.
         product: Instância do produto.
         quantity: Quantidade desejada.
+        delivery_method: Método de entrega preferido (TELEGRAM, WHATSAPP, EMAIL).
 
     Returns:
         dict: Resultado da operação com status e dados.
@@ -66,10 +72,6 @@ async def purchase_product(
     # Validações
     if quantity <= 0:
         raise ValueError("Quantidade deve ser maior que zero.")
-
-    if product.max_per_user > 0:
-        # TODO: verificar se usuário já atingiu limite de compra do produto
-        pass
 
     # Verifica saldo
     balance_cents = await get_balance(session, tenant_id, user.id)
@@ -133,9 +135,9 @@ async def purchase_product(
         sold_item_ids=[item.id for item in reserved_items],
     )
     if sold_count != quantity:
-        # Inconsistência: reverter débito? Em produção, usar transação unificada
+        # Inconsistência: reverter débito e cancelar reserva
         logger.error(f"Inconsistência: esperado {quantity} vendidos, mas {sold_count} marcados.")
-        # Por simplicidade, cancelar pedido e reverter saldo
+        # Estorna débito
         await debit_wallet(
             session,
             tenant_id=tenant_id,
@@ -178,46 +180,31 @@ async def purchase_product(
         )
         session.add(order_item)
 
+    # Commit principal da compra (pedido e itens)
     await session.commit()
     await session.refresh(order)
 
     logger.info(f"Compra concluída: order_id={order.id}, user_id={user.id}, total={total_cents}")
+
+    # Gera entrega e token de acesso (após commit da compra, mas dentro da mesma sessão)
+    delivery_info = None
+    try:
+        delivery_info = await create_delivery_for_order(
+            session,
+            tenant_id=tenant_id,
+            order=order,
+            user=user,
+            method=delivery_method,
+        )
+    except Exception as e:
+        logger.exception(f"Erro ao gerar entrega para order_id={order.id}: {e}")
+        # A compra já está concluída; o erro não reverte a compra.
+        # Em produção, pode-se agendar retry.
 
     return {
         "status": "COMPLETED",
         "order_id": order.id,
         "total_cents": total_cents,
         "items_sold": sold_count,
+        "delivery": delivery_info,
     }
-
-
-async def purchase_with_pending_payment(
-    session: AsyncSession,
-    tenant_id: UUID,
-    user: User,
-    product: Product,
-    quantity: int,
-    payment_id: UUID,
-) -> dict:
-    """
-    Finaliza uma compra após confirmação de pagamento Pix.
-
-    Esse fluxo é usado quando o usuário não tinha saldo e gerou um Pix
-    para cobrir a diferença. Após o pagamento ser confirmado, este método
-    é chamado para reservar estoque, criar pedido e marcar itens como SOLD.
-
-    Args:
-        session: Sessão do banco.
-        tenant_id: ID do tenant.
-        user: Usuário comprador.
-        product: Produto.
-        quantity: Quantidade.
-        payment_id: ID do pagamento confirmado.
-
-    Returns:
-        dict: Resultado.
-    """
-    # A lógica é similar ao purchase_product, mas não debita saldo,
-    # pois o valor veio do pagamento. Apenas reserva e finaliza.
-    # Implementação futura mais detalhada.
-    return await purchase_product(session, tenant_id, user, product, quantity)
