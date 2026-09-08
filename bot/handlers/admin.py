@@ -15,6 +15,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import func, select
 
+from bot.core.config import settings
 from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button
@@ -68,8 +69,9 @@ ADMIN_SECTIONS = [
 
 async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -85,8 +87,9 @@ async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
 
 async def _get_tenant_and_user_from_message(message: Message):
     """Obtém tenant e usuário a partir de mensagem."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, message.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as session:
+        tenant = await get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -137,7 +140,8 @@ async def cmd_admin(message: Message, state: FSMContext):
         await message.answer("⚠️ Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         if not await _is_admin(session, tenant.id, user.id):
             await message.answer("🚫 Acesso negado.")
             return
@@ -147,7 +151,8 @@ async def cmd_admin(message: Message, state: FSMContext):
 
 async def show_admin_main_message(message: Message, tenant, user):
     """Exibe o menu principal administrativo em uma nova mensagem."""
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         total_users = (await session.execute(
             select(func.count(User.id)).where(
                 User.tenant_id == tenant.id,
@@ -219,7 +224,8 @@ async def show_admin_main(callback: CallbackQuery, state: FSMContext):
     total_pages = (total_sections + per_page - 1) // per_page
     page = max(1, min(page, total_pages))
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         if not await _is_admin(session, tenant.id, user.id):
             await callback.answer("Acesso negado.", show_alert=True)
             return
