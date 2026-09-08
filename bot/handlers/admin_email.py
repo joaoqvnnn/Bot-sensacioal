@@ -28,7 +28,7 @@ router = Router()
 
 
 class AdminEmailStates(StatesGroup):
-    WAITING_VALUE = State()  # usado para valores simples
+    WAITING_VALUE = State()
 
 
 async def _get_tenant_and_user_from_callback(callback: CallbackQuery):
