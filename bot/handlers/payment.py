@@ -14,6 +14,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 
+from bot.core.config import settings
 from bot.core.database import get_async_session_factory
 from bot.core.utils import cents_to_brl
 from bot.keyboards.utils import create_button
@@ -28,8 +29,8 @@ router = Router()
 
 async def _get_tenant_and_user(callback: CallbackQuery):
     """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
+    factory = get_async_session_factory()
+    async with factory() as get_tenant_for_bot(session, settings.TELEGRAM_BOT_USERNAME)
         if tenant is None:
             return None, None
         user = await get_or_create_user(
@@ -62,7 +63,8 @@ async def check_payment(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         payment = await get_payment_by_id(
             session=session,
             tenant_id=tenant.id,
@@ -75,7 +77,6 @@ async def check_payment(callback: CallbackQuery, state: FSMContext):
 
         balance_cents = await get_balance(session, tenant.id, user.id)
 
-    # Monta mensagem conforme status
     status_emoji = {
         "PENDING": "🟡",
         "PAID": "🟢",
@@ -135,7 +136,8 @@ async def copy_pix(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Sistema indisponível.")
         return
 
-    async with get_async_session_factory() as session:
+    factory = get_async_session_factory()
+    async with factory() as session:
         payment = await get_payment_by_id(session, tenant.id, payment_id)
         if payment is None or payment.user_id != user.id:
             await callback.answer("Pagamento não encontrado.")
