@@ -1,203 +1,120 @@
 """
-Handlers do painel administrativo principal.
+Pacote de handlers do bot.
 
-Este módulo fornece o menu inicial do administrador, com dashboard
-e navegação para todas as seções (módulos) do painel.
-
-Cada seção possui seu próprio handler dedicado, evitando conflitos.
+Centraliza a importação e registro de todos os routers de handlers.
+A função `register_all_handlers` é chamada na inicialização do bot
+para incluir os routers no Dispatcher.
 """
 
 import logging
-from typing import Optional
-from uuid import UUID
+from aiogram import Dispatcher
 
-from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup
-from aiogram.fsm.context import FSMContext
-from sqlalchemy import func, select
+# Handlers de usuário
+from bot.handlers.start import router as start_router
+from bot.handlers.catalog import router as catalog_router
+from bot.handlers.checkout import router as checkout_router
+from bot.handlers.recharge import router as recharge_router
+from bot.handlers.payment import router as payment_router
+from bot.handlers.affiliate import router as affiliate_router
+from bot.handlers.profile import router as profile_router
+from bot.handlers.rankings import router as rankings_router
+from bot.handlers.alerts import router as alerts_router
+from bot.handlers.inline import router as inline_router
+from bot.handlers.terms import router as terms_router
+from bot.handlers.support import router as support_router
 
-from bot.core.database import get_async_session_factory
-from bot.core.utils import cents_to_brl
-from bot.keyboards.utils import create_button
-from bot.models.order import Order
-from bot.models.user import User
-from bot.services.user_service import get_tenant_for_bot, get_or_create_user
-
-logger = logging.getLogger(__name__)
-
-router = Router()
-
-
-# ----------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------
-
-async def _get_tenant_and_user(callback: CallbackQuery):
-    """Obtém tenant e usuário a partir do callback."""
-    async with get_async_session_factory() as session:
-        tenant = await get_tenant_for_bot(session, callback.bot.username)
-        if tenant is None:
-            return None, None
-        user = await get_or_create_user(
-            session=session,
-            tenant=tenant,
-            telegram_id=callback.from_user.id,
-            username=callback.from_user.username,
-            first_name=callback.from_user.first_name,
-            last_name=callback.from_user.last_name,
-        )
-        return tenant, user
-
-
-async def _is_admin(session, tenant_id: UUID, user_id: UUID) -> bool:
-    """Verifica se o usuário é administrador ou dono no tenant."""
-    user = (await session.execute(
-        select(User).where(User.id == user_id, User.tenant_id == tenant_id)
-    )).scalar_one_or_none()
-    if user and (user.is_owner or user.is_admin):
-        return True
-
-    from bot.models.admin_user import AdminUser
-    admin = (await session.execute(
-        select(AdminUser).where(
-            AdminUser.tenant_id == tenant_id,
-            AdminUser.user_id == user_id,
-            AdminUser.is_active == True,
-            AdminUser.deleted_at.is_(None),
-        )
-    )).scalar_one_or_none()
-    return admin is not None
+# Handlers administrativos (painel completo)
+from bot.handlers.admin import router as admin_router
+from bot.handlers.admin_general import router as admin_general_router
+from bot.handlers.admin_editor_textos import router as admin_editor_textos_router
+from bot.handlers.admin_buttons import router as admin_buttons_router
+from bot.handlers.admin_placeholders import router as admin_placeholders_router
+from bot.handlers.admin_admins import router as admin_admins_router
+from bot.handlers.admin_bonus import router as admin_bonus_router
+from bot.handlers.admin_broadcast import router as admin_broadcast_router
+from bot.handlers.admin_scheduler import router as admin_scheduler_router
+from bot.handlers.admin_categories import router as admin_categories_router
+from bot.handlers.admin_products import router as admin_products_router
+from bot.handlers.admin_inventory import router as admin_inventory_router
+from bot.handlers.admin_reservation import router as admin_reservation_router
+from bot.handlers.admin_payments import router as admin_payments_router
+from bot.handlers.admin_wallet import router as admin_wallet_router
+from bot.handlers.admin_affiliates import router as admin_affiliates_router
+from bot.handlers.admin_withdrawals import router as admin_withdrawals_router
+from bot.handlers.admin_bank_accounts import router as admin_bank_accounts_router
+from bot.handlers.admin_email import router as admin_email_router
+from bot.handlers.admin_whatsapp import router as admin_whatsapp_router
+from bot.handlers.admin_ai import router as admin_ai_router
+from bot.handlers.admin_search import router as admin_search_router
+from bot.handlers.admin_rankings import router as admin_rankings_router
+from bot.handlers.admin_alerts import router as admin_alerts_router
+from bot.handlers.admin_security import router as admin_security_router
+from bot.handlers.admin_mini_app import router as admin_mini_app_router
+from bot.handlers.admin_multitenant import router as admin_multitenant_router
+from bot.handlers.admin_updates import router as admin_updates_router
+from bot.handlers.admin_integrity import router as admin_integrity_router
 
 
-async def _edit_or_answer(callback: CallbackQuery, text: str, keyboard: InlineKeyboardMarkup):
-    """Edita a mensagem atual, se possível."""
-    try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except Exception:
-        await callback.message.answer(text, reply_markup=keyboard)
-    await callback.answer()
+def register_all_handlers(dp: Dispatcher) -> None:
+    """
+    Registra todos os routers de handlers no Dispatcher.
 
+    Args:
+        dp: Instância do Dispatcher do aiogram.
 
-# ----------------------------------------------------------------------
-# Lista de seções administrativas (título, callback)
-# ----------------------------------------------------------------------
+    Raises:
+        ValueError: Se houver conflito de handlers (por exemplo, comandos duplicados).
+    """
+    # Lista de routers a registrar
+    routers = [
+        # Usuário
+        start_router,
+        catalog_router,
+        checkout_router,
+        recharge_router,
+        payment_router,
+        affiliate_router,
+        profile_router,
+        rankings_router,
+        alerts_router,
+        inline_router,
+        terms_router,
+        support_router,
 
-ADMIN_SECTIONS = [
-    ("🏠 Configurações Gerais", "admin:general"),
-    ("📝 Editor de Textos", "admin:editor_textos"),
-    ("🔘 Configuração dos Botões", "admin:buttons"),
-    ("🧩 Placeholders", "admin:placeholders"),
-    ("👑 Administradores", "admins:main"),
-    ("👥 Usuários", "admin:manage_users"),
-    ("🎁 Bônus de Registro", "admin:bonus"),
-    ("📢 Transmissões", "broadcast:main"),
-    ("📅 Agendador", "scheduler:main"),
-    ("🛍️ Categorias", "categories:main"),
-    ("📦 Produtos", "products:main"),
-    ("📦 Estoque / Logins", "inventory:main"),
-    ("🔒 Reserva de Estoque", "reservation:main"),
-    ("💳 Pix / Pagamentos", "pix_admin:main"),
-    ("💰 Carteira / Saldo", "wallet_admin:main"),
-    ("💎 Afiliados", "aff_admin:main"),
-    ("💸 Saques", "withdrawals_admin:main"),
-    ("🏦 Contas Bancárias", "bank_admin:main"),
-    ("📧 E-mail", "email_admin:main"),
-    ("📱 WhatsApp", "whatsapp_admin:main"),
-    ("🤖 IA", "ai_admin:main"),
-    ("🔎 Pesquisa de Serviços", "search_admin:main"),
-    ("🏆 Rankings", "rankings_admin:main"),
-    ("⚠️ Alertas de Estoque", "alerts_admin:main"),
-    ("🛡️ Anti-flood / Segurança", "sec_admin:main"),
-    ("🔐 Segurança da Plataforma", "sec_admin:main"),
-    ("📋 Logs e Auditoria", "sec_admin:main"),
-    ("🧩 Configuração do Mini App", "miniapp_admin:main"),
-    ("🏢 Multi-tenant / Aluguel", "mt:main"),
-    ("🔄 Atualizações", "updates_admin:main"),
-    ("🧪 Integridade do Sistema", "integrity:main"),
-]
+        # Admin
+        admin_router,
+        admin_general_router,
+        admin_editor_textos_router,
+        admin_buttons_router,
+        admin_placeholders_router,
+        admin_admins_router,
+        admin_bonus_router,
+        admin_broadcast_router,
+        admin_scheduler_router,
+        admin_categories_router,
+        admin_products_router,
+        admin_inventory_router,
+        admin_reservation_router,
+        admin_payments_router,
+        admin_wallet_router,
+        admin_affiliates_router,
+        admin_withdrawals_router,
+        admin_bank_accounts_router,
+        admin_email_router,
+        admin_whatsapp_router,
+        admin_ai_router,
+        admin_search_router,
+        admin_rankings_router,
+        admin_alerts_router,
+        admin_security_router,
+        admin_mini_app_router,
+        admin_multitenant_router,
+        admin_updates_router,
+        admin_integrity_router,
+    ]
 
+    for router in routers:
+        dp.include_router(router)
 
-# ----------------------------------------------------------------------
-# Menu principal com paginação
-# ----------------------------------------------------------------------
-
-@router.callback_query(F.data == "admin:main")
-@router.callback_query(F.data.startswith("admin:page:"))
-async def show_admin_main(callback: CallbackQuery, state: FSMContext):
-    """Exibe o menu principal do painel administrativo com paginação."""
-    tenant, user = await _get_tenant_and_user(callback)
-    if tenant is None:
-        await callback.answer("Sistema indisponível.")
-        return
-
-    # Determina página atual
-    if callback.data == "admin:main":
-        page = 1
-    else:
-        page = int(callback.data.split(":")[-1])
-
-    per_page = 8
-    total_sections = len(ADMIN_SECTIONS)
-    total_pages = (total_sections + per_page - 1) // per_page
-    page = max(1, min(page, total_pages))
-
-    async with get_async_session_factory() as session:
-        if not await _is_admin(session, tenant.id, user.id):
-            await callback.answer("Acesso negado.", show_alert=True)
-            return
-
-        total_users = (await session.execute(
-            select(func.count(User.id)).where(
-                User.tenant_id == tenant.id,
-                User.deleted_at.is_(None)
-            )
-        )).scalar_one()
-
-        total_revenue = (await session.execute(
-            select(func.sum(Order.total_cents)).where(
-                Order.tenant_id == tenant.id,
-                Order.status == "COMPLETED",
-                Order.deleted_at.is_(None)
-            )
-        )).scalar_one() or 0
-
-        total_sales = (await session.execute(
-            select(func.count(Order.id)).where(
-                Order.tenant_id == tenant.id,
-                Order.status == "COMPLETED",
-                Order.deleted_at.is_(None)
-            )
-        )).scalar_one()
-
-    text = (
-        "⚙️ CONFIGURAÇÕES ADMINISTRATIVAS\n"
-        f"Admin: {'Sim' if await _is_admin(session, tenant.id, user.id) else 'Não'}\n"
-        f"Dono: {'Sim' if user.is_owner else 'Não'}\n\n"
-        "📊 Dashboard:\n"
-        f"👥 Usuários: {total_users}\n"
-        f"💰 Receita total: {cents_to_brl(int(total_revenue))}\n"
-        f"🛒 Vendas: {total_sales}\n\n"
-        f"Página {page}/{total_pages}\n"
-        "Selecione uma seção:"
-    )
-
-    start = (page - 1) * per_page
-    end = start + per_page
-    page_sections = ADMIN_SECTIONS[start:end]
-
-    buttons = []
-    for title, callback_data in page_sections:
-        buttons.append([create_button(title, callback_data)])
-
-    nav_buttons = []
-    if page > 1:
-        nav_buttons.append(create_button("⬅️ Anterior", f"admin:page:{page-1}"))
-    if page < total_pages:
-        nav_buttons.append(create_button("Próxima ➡️", f"admin:page:{page+1}"))
-    if nav_buttons:
-        buttons.append(nav_buttons)
-
-    buttons.append([create_button("🔙 VOLTAR", "menu:back")])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await _edit_or_answer(callback, text, keyboard)
+    logger = logging.getLogger(__name__)
+    logger.info(f"{len(routers)} router(s) registrado(s) no Dispatcher.")
