@@ -6,7 +6,10 @@ Painel inicial do administrador/dono, com:
 - Gerenciamento de admins (adicionar, remover, listar)
 - Configurações de afiliados (percentual, pontos, mínimo)
 - Configurações de Pix (mínimo, máximo, bônus, expiração)
+- Gerenciamento de usuários (pesquisa, bloqueio, ajuste de saldo)
+- Gerenciamento de produtos/estoque (adicionar/remover logins)
 - Edição de mensagens e mídias (templates, imagens)
+- Anti-flood e manutenção
 
 Tudo editando a mesma mensagem, com botões de voltar.
 """
@@ -173,6 +176,8 @@ async def show_admin_main(callback: CallbackQuery, state: FSMContext):
         [create_button("👥 CONFIGURAR USUÁRIOS", "admin:manage_users")],
         [create_button("📦 CONFIGURAR LOGINS", "admin:manage_stock")],
         [create_button("✏️ MENSAGENS/MÍDIAS", "admin:messages")],
+        [create_button("🛡 ANTI-FLOOD", "admin:antiflood")],
+        [create_button("🔧 MANUTENÇÃO", "admin:maintenance")],
         [create_button("🔙 VOLTAR", "menu:back")],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
