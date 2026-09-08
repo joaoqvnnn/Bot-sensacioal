@@ -1,5 +1,6 @@
 """
 Servidor HTTP para receber webhooks do Mercado Pago enquanto roda o bot.
+Inclui validação de assinatura HMAC, endpoint do Mini App e criação automática do banco.
 """
 
 import asyncio
@@ -14,6 +15,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse
 
 from bot.core.config import settings
 from bot.core.database import get_async_engine, get_async_session_factory, Base
@@ -34,8 +36,45 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/miniapp", response_class=HTMLResponse)
+async def miniapp():
+    """
+    Página inicial do Telegram Mini App (provisória).
+    """
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Loja</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f5f5f5;
+                text-align: center;
+                padding: 40px;
+            }
+            h1 {
+                color: #333;
+            }
+            p {
+                color: #666;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>🛍️ Bem-vindo à Loja!</h1>
+        <p>Mini App em construção. Em breve, produtos e carrinho.</p>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+
 @app.post("/webhook/mercadopago")
 async def mercado_pago_webhook(request: Request):
+    """Recebe notificações do Mercado Pago e processa o pagamento."""
     secret = settings.MERCADO_PAGO_WEBHOOK_SECRET.get_secret_value() if settings.MERCADO_PAGO_WEBHOOK_SECRET else None
 
     if secret:
@@ -99,7 +138,6 @@ async def setup_database():
     """Cria as tabelas no banco e insere tenant/admin se necessário."""
     engine = get_async_engine()
 
-    # Drop table users para recriar com BIGINT
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
